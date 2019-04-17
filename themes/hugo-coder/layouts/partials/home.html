@@ -144,14 +144,19 @@ html, body {
             }
         </style>
     </head>
-    <body onload="draw()">
+    <body onload="draw()" ondblclick="followUrl()">
         <div id="viz"></div>
         <div style="z-index: 10000; position: absolute; top: 70%;left: 65%">
-            <span style="float: right;"><input id="search" type="text" placeholder="Search.." name="search">
+            <span style="float: right;"><input id="search" type="text" placeholder="Search for anything..." name="search">
                 <button id="query" style="cursor:pointer;" onclick="search()"><i class="fa fa-search"></i></button>
             </span>
             <div style="font-size: 18px; position: absolute; top: 125%; width: 600px;">
-            Find a specific node/attribute (ex. "project", "C++", "tool")
+                Find a specific node/attribute (ex. "project", "C++", "tool")<br/>
+                <br/>
+                <br/>
+                <br/>
+                <br/>
+                Double-click a node with a url to open that page in a new tab
             </div>
         </div>
     </body>    
@@ -236,6 +241,12 @@ function search() {
     var search = document.getElementById("search").value;
     search = search.split("").map(c => "[" + c + "]").join("");
     viz.renderWithCypher("match (n) with n, [x in keys(n) WHERE n[x]=~ '(?i).*" + search + ".*'] as doesMatch where size(doesMatch) > 0 match (n)-[r]-(m) return *");
+}
+
+function followUrl() {
+    var nodeUrl = document.getElementsByClassName("vis-tooltip")[0];
+    var nodeUrl = nodeUrl.innerHTML.match(/http.*?(?=<)/g)[0];
+    window.open(nodeUrl);
 }
 
 // event listeners
