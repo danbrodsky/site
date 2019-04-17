@@ -1,5 +1,5 @@
 baseurl = "http://www.example.com"
-title = "johndoe"
+title = "Daniel Brodsky"
 
 theme = "hugo-coder"
 
@@ -13,13 +13,13 @@ pygmentsstyle = "b2"
 pygmentscodefences = true
 pygmentscodefencesguesssyntax = true
 
-disqusShortname = "yourdiscussshortname"
+disqusShortname = "danbrodsky"
 
 [params]
-    author = "John Doe"
-    description = "John Doe's personal website"
-    keywords = "blog,developer,personal"
-    info = "Full Stack DevOps and Magician"
+    author = "Daniel Brodsky"
+    description = "personal site for blog and CTF writeups"
+    keywords = "blog,developer,personal, CTF, writeup"
+    info = "Software Engineer"
     avatarurl = "images/avatar.jpg"
     footercontent = "Enter a text here."
 
@@ -34,7 +34,7 @@ disqusShortname = "yourdiscussshortname"
     rtl = false
 
     # Use inverted colors
-    inverted = false
+    inverted = true
 
     # Series see also post count
     maxSeeAlsoItems = 5
@@ -52,7 +52,7 @@ disqusShortname = "yourdiscussshortname"
     url = "https://github.com/johndoe/"
 [[params.social]]
     name = "Gitlab"
-    icon = "fab fa-gitlab"
+    icon = "fa fa-envelope"
     weight = 2
     url = "https://gitlab.com/johndoe/"
 [[params.social]]
@@ -96,36 +96,3 @@ disqusShortname = "yourdiscussshortname"
         weight = 5
         url = "/contact/"
 
-
-    [languages.pt-br]
-        languagename = "Português"
-        title = "João Ninguém"
-
-        [languages.pt-br.params]
-            author = "João Ninguém"
-            info = "Full Stack DevOps e Mágico"
-            description = "Sítio pessoal de João Ninguém"
-            keywords = "blog,desenvolvedor,pessoal"
-            footercontent = "Coloque algum texto aqui."
-
-        [languages.pt-br.menu]
-
-            [[languages.pt-br.menu.main]]
-            name = "Sobre"
-            weight = 1
-            url = "/pt-br/about/"
-
-            [[languages.pt-br.menu.main]]
-            name = "Blog"
-            weight = 2
-            url = "/pt-br/posts/"
-
-            [[languages.pt-br.menu.main]]
-            name = "Projetos"
-            weight = 3
-            url = "/pt-br/projects/"
-
-            [[languages.pt-br.menu.main]]
-            name = "Contato"
-            weight = 5
-            url = "/pt-br/contact/"
