@@ -1,0 +1,252 @@
+<section class="container centered" style="position: relative; top: -120px; left: -20px; z-index: 10000; justify-content: none; max-height: 1rem; max-width: 25rem;">
+    <div class="about" style="text-align: none;">
+        {{ with .Site.Params.social }}
+        <ul>
+            {{ range sort .}}
+            {{ if .icon }}
+            <li>
+                <a href="{{ .url }}" aria-label="{{ .name }}">
+                    <i class="{{ .icon }}" style="font-size: 115%;" aria-hidden="true"></i>
+                </a>
+            </li>
+            {{ else }}
+            <li>
+                <a href="{{ .url }}" aria-label="{{ .name }}">{{ .name }}</a>
+            </li>
+            {{ end }}
+            {{ end }}
+        </ul>
+        {{ end }}
+    </div>
+</section>
+<style>
+.tooltip {
+    z-index: 1000;
+    position: relative;
+    border: none;
+}
+.tooltip:before,
+.tooltip:after {
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+}
+.tooltip:after {
+    border-right: 6px solid transparent;
+    border-bottom: 6px solid rgba(0,0,0,.75); 
+    border-left: 6px solid transparent;
+    content: '';
+    height: 0;
+    top: 20px;
+    left: 20px;
+    width: 0;
+}
+.tooltip:before {
+    background: rgba(0,0,0,.75);
+    border-radius: 2px;
+    color: #fff;
+    content: attr(data-title);
+    font-size: 14px;
+    padding: 6px 10px;
+    top: 26px;
+    white-space: normal;
+}
+
+/* the animations */
+/* fade */
+.tooltip.fade:after,
+.tooltip.fade:before {
+    transform: translate3d(0,-10px,0);
+    transition: all .15s ease-in-out;
+}
+.tooltip.fade:hover:after,
+.tooltip.fade:hover:before {
+    opacity: 1;
+    transform: translate3d(0,0,0);
+}
+
+/* expand */
+.tooltip.expand:before {
+    transform: scale3d(.2,.2,1);
+    transition: all .2s ease-in-out;
+}
+.tooltip.expand:after {
+    transform: translate3d(0,6px,0);
+    transition: all .1s ease-in-out;
+}
+.tooltip.expand:hover:before,
+.tooltip.expand:hover:after {
+    opacity: 1;
+    transform: scale3d(1,1,1);
+}
+.tooltip.expand:hover:after {
+    transition: all .2s .1s ease-in-out;
+}
+
+/* swing */
+.tooltip.swing:before,
+.tooltip.swing:after {
+    transform: translate3d(0,30px,0) rotate3d(0,0,1,60deg);
+    transform-origin: 0 0;
+    transition: transform .15s ease-in-out, opacity .2s;
+}
+.tooltip.swing:after {
+    transform: translate3d(0,60px,0);
+    transition: transform .15s ease-in-out, opacity .2s;
+}
+.tooltip.swing:hover:before,
+.tooltip.swing:hover:after {
+    opacity: 1;
+    transform: translate3d(0,0,0) rotate3d(1,1,1,0deg);
+}
+.button {
+    background-color: #4CAF50; /* Green */
+    border: none;
+    color: white;
+    padding: 16px 32px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    -webkit-transition-duration: 0.4s; /* Safari */
+    transition-duration: 0.4s;
+    cursor: pointer;
+}
+.button5 {
+    background-color: white;
+    color: black;
+    border: 2px solid #555555;
+}
+
+.button5:hover {
+    background-color: #555555;
+    color: white;
+}
+</style>
+<section class="container centered">
+    <head>
+        <title>Profile Graph</title>
+        <style type="text/css">
+html, body {
+    font: 16pt arial;
+}
+
+            #viz {
+                z-index: 1;
+                position: absolute;
+                top: 0;
+                left: -10%;
+                width: 100%;
+                height: 100%;
+                font: 22pt sans;
+            }
+        </style>
+    </head>
+    <body onload="draw()">
+        <div id="viz"></div>
+        <div style="z-index: 10000; position: absolute; top: 70%;left: 65%">
+            <span style="float: right;"><input id="search" type="text" placeholder="Search.." name="search">
+                <button id="query" style="cursor:pointer;" onclick="search()"><i class="fa fa-search"></i></button>
+            </span>
+            <div style="font-size: 18px; position: absolute; top: 125%; width: 600px;">
+            Find a specific node/attribute (ex. "project", "C++", "tool")
+            </div>
+        </div>
+    </body>    
+</section>
+<script src="https://rawgit.com/neo4j-contrib/neovis.js/master/dist/neovis.js"></script>
+<script type="text/javascript">
+
+    var viz;
+
+function draw() {
+    var config = {
+        container_id: "viz",
+        server_url: "bolt://localhost:7687",
+        server_user: "neo4j",
+        server_password: "x",
+        labels: {
+            "project": {
+                "caption": "name"
+            },
+            "Operating System": {
+                "caption": "name"
+            },
+            "framework": {
+                "caption": "name"
+            },
+            "language": {
+                "caption": "name"
+            },
+            "tool": {
+                "caption": "name"
+            },
+            "library": {
+                "caption": "name"
+            },
+            "About me": {
+                "caption": "name"
+            },
+            "database": {
+                "caption": "name"
+            },
+            "company": {
+                "caption": "name"
+            },
+        },
+        relationships: {
+            "USES": {
+                "caption": false
+            },
+            "KNOWS": {
+                "caption": false
+            },
+            "WRITTEN IN": {
+                "caption": false
+            },
+            "USING": {
+                "caption": false
+            },
+            "CREATED": {
+                "caption": false
+            },
+            "MADE AT": {
+                "caption": false
+            },
+            "WORKED AT": {
+                "caption": false
+            },
+        },
+        initial_cypher: "MATCH (n)-[r]->(m) return *"
+        //initial_cypher: "match (n:project)-[r]->(m), (mm)-[rr]->(nn:project) return *"
+    };
+
+    viz = new NeoVis.default(config);
+    viz.render();
+}
+
+function projects() {
+
+    viz.renderWithCypher("match (n:project)-[r]->(m), (mm)-[rr]->(nn:project) return *");
+
+}
+function search() {
+    var search = document.getElementById("search").value;
+    search = search.split("").map(c => "[" + c + "]").join("");
+    viz.renderWithCypher("match (n) with n, [x in keys(n) WHERE n[x]=~ '(?i).*" + search + ".*'] as doesMatch where size(doesMatch) > 0 match (n)-[r]-(m) return *");
+}
+
+// event listeners
+var input = document.getElementById("search");
+input.addEventListener("keyup", function(event) {
+  // Number 13 is the "Enter" key on the keyboard
+  if (event.keyCode === 13) {
+    // Cancel the default action, if needed
+    event.preventDefault();
+    // Trigger the button element with a click
+    document.getElementById("query").click();
+  }
+});
+</script>
