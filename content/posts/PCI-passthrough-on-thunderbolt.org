@@ -1,0 +1,371 @@
+#+title: PCI Passthrough with Thunderbolt
+#+author: Daniel Brodsky
+#+date: 2019-04-20
+
+#+hugo_base_dir: ../../
+#+hugo_section: posts
+#+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
+#+description: Attempting to pass an Nvidia GTX 1060 to a virtual machine using thunderbolt
+
+* Introduction
+I'm a Linux-only user. My workspace is extremely tailored to provide me with a
+load of productivity in the form of convenience. I also do everything from my
+laptop so I don't need to constantly switch between devices. The downside here
+is that when I want to be the opposite of productive and hammer away a few hours
+playing video games, I have to give up either my game's performance
+(Wine/ProtonDB), or my convenience (Dual-booting, using a separate machine).
+Instead I've opted to go for the path with the best performance and convenience.
+By modifying my Linux kernel to be able to pass through hardware directly to
+other applications, I'll be able to run a Windows VM with my graphics card
+hooked up and play my video games with minimal downsides.
+
+* An Important Note
+Before I get started, I feel it's important to mention that I could not get the
+GPU working reliably inside the VM without major artifacts and instability (this
+only applies to PCI passthrough using a Thunderbolt controller). [[https://www.reddit.com/r/VFIO/comments/8es86f/successful_thunderbolt3_gpu_passthrough_on_lenovo/][Some people]]
+have managed to get this working fully on Debian-based flavors of linux (likely
+due to their native support for virtualization), but since I'm an Arch Linux
+user I opted to not pursue getting this to work any further at this time. It's
+probably better that I have to jump through a few hoops to play some video
+games, since it acts as a deterrent and keeps me focused for longer.
+
+* Resources
+[[https://wiki.archlinux.org/index.php/PCI_passthrough_via_OVMF]]
+
+The holy bible of setting up PCI passthrough. Everything you need is here,
+except there are some things that may need prerequisite knowledge that will
+force you to search elsewhere.
+
+[[https://github.com/vanities/GPU-Passthrough-Arch-Linux-to-Windows10]]
+
+A more cut-down version of the above guide, but with pictures in case you need
+more clarity.
+
+[[https://www.reddit.com/r/VFIO/]]
+
+You can find solutions to most problems you experience by just searching here.
+If not, you can also ask the community and hopefully someone will be able to
+give you some assistance.
+
+* My setup
+- Toshiba Portege X20w
+
+  my particular laptop only has a dual-core i5 7200u
+     and is likely not the ideal laptop for this sort of setup. It would be much
+     better to use something with a quad-core processor as you'll need to pass
+     resources directly into your VM and this may result in throttling your host
+     machine if you don't have strong enough hardware.
+
+- EVGA Nvidia GTX 1060 mini 6GB
+
+  I'd strongly advice against buying an Nvidia
+     GPU. The main reason for this is that Nvidia appears to be acting against
+     enabling virtualization and many of the issues you might experience are
+     directly related to decisions they made when creating drivers.
+
+- Gigabyte Aorus Gaming Box
+
+  One of the most affordable options for a
+     Thunderbolt3 external graphics card enclosure. Only downside is that it
+     can't fit anything larger than mini-sized graphics cards, so it might not
+     work for you.
+    
+- Arch 5.0.7 kernel
+
+  The linux kernel I was running at the time of making this
+     setup. I'd recommend using Ubuntu or RHEL as the likelihood of success is
+     much higher, but Arch is a great distro so I won't be abandoning it here.
+    
+** Note
+
+Due to the hardware/software I'm using, I'll only be covering how to get Intel-based
+machines with an Nvidia graphics card working on Arch.
+
+* Step 1 - Modifying your kernel to support PCI passthrough
+
+** Make sure Intel VT-d is enabled in your system BIOS
+What these BIOS options do is enable Direct Memeory Access (DMA) for hardware
+devices to specific memory regions only, isolating it from the rest of the
+system. You'll need to enable this so that you can set up and allocate the
+resources used by virtual machines.
+
+** Enabling direct control of IOMMU in your kernel
+IOMMU stands for Input-Output Memory Management Unit and it normally controls
+the access of hardware resources to regions in memory automatically by mapping
+virtual addresses that the device can see to physical memory regions. What we
+need to do is set our kernel to give us control over the IOMMU so that we can
+isolate the hardware we plan to use for our guest VM.
+#+BEGIN_SRC bash
+sudo vim /etc/defaults/grub/
+# Modify GRUB_CMDLINE_LINUX_DEFAULT by appending "intel_iommu=on iommu=pt"
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+sudo reboot now
+#+END_SRC
+This will add the necessary kernel parameters to enable control of the IOMMU and
+also generate a new configuration file for GRUB with the updated changes.
+
+** GPU Isolation
+Now that we've enabled control of the IOMMU, we need to isolate our GPU and
+ensure that it's using the correct kernel drivers for virtualization. We'll do
+this with the following:
+#+BEGIN_SRC bash
+# this displays all connected PCI devices along with their vendor-device ID pairs
+lspci -knn
+# Copy the device ID (format is [10de:xxxx]) for the graphics card and audio
+
+sudo echo 'options vfio-pci ids=<gpu-id>,<audio-id>' >> /etc/modprobe.d/vfio.conf
+
+sudo vim /etc/mkinitcpio.conf
+# modify MODULES by adding 'vfio_pci vfio vfio_iommu_type1 vfio_virqfd' to the start
+# modfiy HOOKS by adding 'modconf' if it's not already present
+#+END_SRC
+What we've done now is load the virtualization drivers (vfio-pci) and set them
+to be the drivers used by our target PCI devices (the GPU). We now need to
+regenerate our kernel image, which we can do with:
+#+BEGIN_SRC bash
+sudo mkinitcpio -P
+sudo reboot now
+#+END_SRC
+If everything worked as expected, you should be able to run ~lspci -knn~ and see
+that your graphics card and audio are now using vfio-pci drivers.
+
+** Setting up a virtualization environment
+You'll first need to download some packages using:
+#+BEGIN_SRC bash
+sudo pacman -Syu libvirt virt-manager ovmf qemu
+#+END_SRC
+Libvirt is a wrapper around QEMU for managing platform virtualization and giving
+us an easier API to work with. Virt-manager is a GUI that makes setting up some
+of the next specs a bit easier. OVMF stands for Open Virtual Machine Firmware
+and gives virtual machines the ability to run a UEFI (Unifed Extensible Firmware
+Interface). We'll need this for our VM to detect and interface with our GPU when
+we pass it in. Lastly, QEMU is an open-source emulator that can convert
+instructions between architectures and emulate hardware devices for VMs using
+host hardware.
+
+Once the packages are done installing, we'll need to add the path to our OVMF
+firmware image to libvirt:
+#+BEGIN_SRC bash
+sudo echo 'nvram = [
+	"/usr/share/ovmf/x64/OVMF_CODE.fd:/usr/share/ovmf/x64/OVMF_VARS.fd"
+]' >> /etc/libvirt/qemu.conf
+#+END_SRC
+
+Then we'll enable libvirt and add give our user permission to use libvirt with:
+#+BEGIN_SRC bash
+sudo systemctl start libvirtd.service
+sudo systemctl start virtlogd.service
+sudo systemctl enable libvirtd.service
+sudo systemctl enable virtlogd.service
+sudo usermod -a -G libvirt $USER
+#+END_SRC
+
+Now our environment is ready for creating a VM that can interface with our GPU.
+
+** Creating a VM
+You'll want to enter ~virt-manager &~ to start a GUI for VM management. Press
+the button for creating a new VM and select the Windows 10 ISO you need to
+download from [[https://www.microsoft.com/en-us/software-download/windows10ISO][here]]. Then click through the install wizard until you reach the
+last screen and make sure to check the option for customizing your VM before you
+install. When the GUI with your VM configuration opens, make sure to go to the
+"Overview" section and select to use UEFI with OVMF from the "Firmware" dropdown
+and "Q35" for chipset.
+
+Now we'll make some general changes to the VM to make sure it's functional.
+
+- Remove the default IDE disk and create a new SCSI disk
+- download the virtio drivers so the guest VM recognizes our hardware [[https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.160-1/][here]] and
+  add it to a new SATA CD-ROM
+- Add the PCI devices corresponding to the graphics card, audio, and an external
+  mouse+keyboard
+
+   (do not add any thunderbolt devices to the VM or the host will
+  not be able to communicate with them and the GPU will fail)
+ 
+At this point the VM is all set up and ready to be run. If when you run the VM
+your external monitor does not turn on with the UEFI screen then something must
+be wrong and you'll need to troubleshoot.
+
+** Setting up Windows
+In order to now install Windows on the SCSI disk created before, you'll need to
+do the following:
+
+- On the UEFI screen type "exit" to enter into the BIOS
+- From the BIOS go to "boot manager" and select the CD-ROM holding the Windows
+  10 ISO
+- Go through the Windows installation steps, but select "custom install" when
+  given the prompt
+- From this screen select "load driver", then select the CD holding the virtio
+  drivers->vioscsi->w10->amd64
+- From the previous step the SCSI disk should now be visible to the VM. Select
+  it and continue with the Windows installation
+
+Once Windows is installed you'll notice that in device manager your graphics
+card cannot be recognized. To fix this you'll need to install the necessary
+drivers for your graphics card. If that doesn't fix the problem then see the
+troubleshooting options below.
+
+** Conclusion
+I hope setting all of this up went better for you than it did for me. If it
+didn't, I've included as much troubleshooting advice as I can offer below to
+make it easier to find. I had to scour the web for quite a while to find a lot
+of this so hopefully this saves you some time.
+
+** Troubleshooting
+
+*** Poor performance
+There are a number of reasons why someone might experience poor performance from
+their VM. These are some of the techniques I found that might be able to help in
+this regard.
+
+**** CPU Settings passthrough
+The VM might not correctly recognize the layout of your CPU and cause
+performance degradation. To fix this you'll need to set your CPU in the VM to
+use 'host-passthrough'. If this option isn't available, you can change it in
+your VM's configuration file with:
+#+BEGIN_SRC bash
+sudo EDITOR=vim virsh edit <your-vm-name>
+# Change <cpu ... > by adding "mode=host-passthrough="
+#+END_SRC
+
+**** Enabling static hugepages
+When the VM is using memory, QEMU stores that memory in 2MiB pages that the host
+system also uses. If the VM is using up most of the host machine's available
+memory, the host might not be able to allocate anymore 2MiB pages to the VM and
+will instead allocate 4KiB pages. This will likely result in significantly more
+cache misses and a degradation of memory performance. To prevent this, it might
+be worth it to statically allocate pages to the VM.
+#+BEGIN_SRC bash
+sudo vim /etc/default/grub
+# add 'default_hugepagesz=2M hugepagesz=2M hugepages=<VM-RAM/2M>' to DEFAULT
+sudo EDITOR=vim virsh edit <your-vm-name>
+# Add <memoryBacking><hugepages/></memoryBacking> to the config file
+#+END_SRC
+
+**** CPU pinning
+Different processor manufacturers handle hyperthreading in different ways. In
+AMD's case the secondary thread from a core is placed sequentially to the
+primary thread. However, Intel places the the secondary thread at the end after
+all primary thread cores. Since it's more efficient for our VM to run everything
+on the same core, we need to explicitly give our VM the threads for that core.
+To do this we need our VM to know about our CPU topology.
+#+BEGIN_SRC bash
+grep -e "core id" -e "processor" /proc/cpuinfo
+# from this we can see what core each of our threads is located on
+sudo EDITOR=vim virsh edit <your-vm-name>
+# Add the following under vcpu:
+#<vcpu placement='static'>4</vcpu>
+#<cputune>
+#    <vcpupin vcpu='0' cpuset='<core id for this procesor>'/>
+#    <vcpupin vcpu='1' cpuset='<core id for this procesor>'/>
+#    <vcpupin vcpu='2' cpuset='<core id for this procesor>'/>
+#    <vcpupin vcpu='3' cpuset='<core id for this procesor>'/>
+#</cputune>
+#+END_SRC
+
+*** GPU not recognized by Windows / Artifacts & Tearing
+This is likely the result of the Nvidia GPU drivers recognizing that the card is
+connected to a virtual environment and intentionally refusing to connect or
+performing with issues. There are a number of possible ways to fix this.
+
+**** Hiding the hypervisor from the VM
+Edit your VM's XML config with:
+#+BEGIN_SRC bash
+...
+<features>
+<hyperv>
+		...
+		<vendor_id state='on' value='whatever'/>
+		...
+	</hyperv>
+	...
+	<kvm>
+	<hidden state='on'/>
+	</kvm>
+</features>
+...
+#+END_SRC
+
+Alternatively you can also do:
+#+BEGIN_SRC bash
+  </devices>
+  <qemu:commandline>
+    <qemu:arg value='-cpu'/>
+    <qemu:arg value='host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time,hv_vendor=whatever'/>
+    ...
+</domain>
+#+END_SRC
+**** Patching the Driver
+If the above doesn't work, you can also try patching the Nvidia drivers used
+within the VM.
+
+- With your Windows VM download the latest drivers for your GPU
+- run the installer but stop it as soon as it's done extracting files
+- download the scripts located at https://github.com/sk1080/nvidia-kvm-patcher
+- Open a new command prompt and input the following:
+  patcher.ps1 C:/NVIDIA/DisplayDriver/Version/Win10_64/International/Display.Driver
+- Once the patcher finishes, go into the directory above and run the Nvidia
+  installer
+
+Note: If the patcher fails to run go into the script and make sure that any
+paths used by the patcher exist within your VM
+
+**** Patching the ROM
+It's also possible to use a patched version of the BIOS for your GPU to avoid
+Nvidia detecting your GPU is running within a virtual environment.
+
+Run the following (this will dump your GPU's BIOS to a file):
+
+    #+BEGIN_SRC bash
+    cd /sys/bus/pci/devices/<your-gpu-pci-address>/
+    echo 1 > rom
+    cat rom > /tmp/gpu.rom
+    echo 0 > rom
+    #+END_SRC
+download the BIOS patcher from [[https://github.com/Matoking/NVIDIA-vBIOS-VFIO-Patcher][here]] and run it on the dumped ROM using:
+
+  #+BEGIN_SRC bash
+python nvidia_vbios_vfio_patcher.py -i <ORIGINAL_ROM> -o <PATCHED_ROM> --ignore-sanity-check
+  #+END_SRC
+Add the following to your VM XML config (make sure it's the correct PCI device):
+
+  #+BEGIN_SRC bash
+   <hostdev>
+     ...
+     <rom file='/path/to/your/patched/gpu/bios.bin'/>
+     ...
+   </hostdev>
+  #+END_SRC
+
+*** Sound problems
+- In your VM change the virtual sound interface from ich9 to ich6
+- Add the following to your VM config:
+#+BEGIN_SRC bash
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+  ...
+  <qemu:commandline>
+    <qemu:env name='QEMU_AUDIO_DRV' value='pa'/>
+    <qemu:env name='QEMU_PA_SAMPLES' value='8192'/>
+    <qemu:env name='QEMU_AUDIO_TIMER_PERIOD' value='99'/>
+    <qemu:env name='QEMU_PA_SERVER' value='/run/user/$(id -u)/pulse/native'/>
+  </qemu:commandline>
+  ...
+</domain>
+#+END_SRC
+*** Cannot pass PCI devices to VM due to IOMMU group conflicts
+This issue requires you to install the vfio patch for your kernel so that your
+PCI devices will be isolated into different IOMMU groups. Using your favourite
+AUR helper (mine's pakku), just run:
+#+BEGIN_SRC bash
+sudo pakku -S linux-vfio
+#+END_SRC
+If you're on a newer kernel, you'll likely need to update PKGBUILD to use the
+same kernel version as the kernel version you're currently running. *DO THIS AT
+YOUR OWN RISK!*
+
+Once the patch finishes installing, you'll need to modify your kernel parameters
+to enable ACS override:
+#+BEGIN_SRC bash
+sudo vim /etc/default/grub
+# add pcie_acs_override=downstream,multifunction=
+#+END_SRC
