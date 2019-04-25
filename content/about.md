@@ -1,29 +1,29 @@
 +++
-title = "About Hugo"
+title = "About Me"
 slug = "about"
 +++
 
-Hugo is a static site engine written in Go.
+My name's Daniel Brodsky and I'm currently a student at the University of British Columbia majoring in Computer Science.
+
+My main interests are:
+
+* **Security**
+
+    Security to me is a field where you need to know how everything works so you know how to defend it and I love the idea of learning how everything works!
+
+* **Low-level systems design**
+
+    Similar to security, I just really want to know more about how everything comes together.
+
+* **increasing my own productivity**
+
+    I'm Linux only (Arch btw) and an Emacs/Vim-heavy user, so I've quite nearly given up the need for a mouse altogether. I enjoy the sense of progression I get when I'm constantly getting better at using more effective tools.
+
+* **CTFs**
+
+    I'm gradually replacing my addiction to video games with a desire to `PWN N00BS` in another form. I'm a happy member of team [Maple Bacon](https://ubcctf.github.io/) and keep track of my progress via writeups and my [cookbook](https://github.com/danbrodsky/Cookbook).
+
+    ![](../ctf.png#center)
 
 
-It makes use of a variety of open source projects including:
-
-* [Cobra](https://github.com/spf13/cobra)
-* [Viper](https://github.com/spf13/viper)
-* [J Walter Weatherman](https://github.com/spf13/jWalterWeatherman)
-* [Cast](https://github.com/spf13/cast)
-
-Learn more and contribute on [GitHub](https://github.com/spf13).
-
-## Setup
-
-Some fun facts about [Hugo](http://gohugo.io/):
-
-* Built in [Go](http://golang.org/)
-* Loosely inspired by [Jekyll](http://jekyllrb.com/)
-* Primarily developed by [spf13](http://spf13.com/) on the train while commuting to and from Manhattan.
-* Coded in [Vim](http://vim.org) using [spf13-vim](http://vim.spf13.com/)
-
-Have questions or suggestions? Feel free to [open an issue on GitHub](https://github.com/spf13/hugo/issues/new) or [ask me on Twitter](https://twitter.com/spf13).
-
-Thanks for reading!
+If you'd like to get in touch, email me @ [danbrodsky@pm.me](mailto:danbrodsky@pm.me)

@@ -245,7 +245,7 @@ sudo EDITOR=vim virsh edit <your-vm-name>
 **** CPU pinning
 Different processor manufacturers handle hyperthreading in different ways. In
 AMD's case the secondary thread from a core is placed sequentially to the
-primary thread. However, Intel places the the secondary thread at the end after
+primary thread. However, Intel places the secondary thread at the end after
 all primary thread cores. Since it's more efficient for our VM to run everything
 on the same core, we need to explicitly give our VM the threads for that core.
 To do this we need our VM to know about our CPU topology.
