@@ -176,9 +176,6 @@ function draw() {
             "project": {
                 "caption": "name"
             },
-            "Operating System": {
-                "caption": "name"
-            },
             "framework": {
                 "caption": "name"
             },
@@ -198,6 +195,12 @@ function draw() {
                 "caption": "name"
             },
             "company": {
+                "caption": "name"
+            },
+            "ctf": {
+                "caption": "name"
+            },
+            "infrastructure": {
                 "caption": "name"
             },
         },
@@ -223,8 +226,11 @@ function draw() {
             "WORKED AT": {
                 "caption": false
             },
+            "PARTICIPANT": {
+                "caption": false
+            },
         },
-        initial_cypher: "MATCH (n)-[r]->(m) return *"
+        initial_cypher: "MATCH (n)-[r]->(m) where not n:Graphileon return *"
         //initial_cypher: "match (n:project)-[r]->(m), (mm)-[rr]->(nn:project) return *"
     };
 
@@ -232,15 +238,10 @@ function draw() {
     viz.render();
 }
 
-function projects() {
-
-    viz.renderWithCypher("match (n:project)-[r]->(m), (mm)-[rr]->(nn:project) return *");
-
-}
 function search() {
     var search = document.getElementById("search").value;
     search = search.split("").map(c => "[" + c + "]").join("");
-    viz.renderWithCypher("match (n) with n, [x in keys(n) WHERE n[x]=~ '(?i).*" + search + ".*'] as doesMatch where size(doesMatch) > 0 match (n)-[r]-(m) return *");
+  viz.renderWithCypher("match (n) with n, [x in keys(n) WHERE n[x]=~ '(?i).*" + search + ".*'] as doesMatch where size(doesMatch) > 0 match (n)-[r]-(m), (a:`About me`)-[r2]-() where not n:Graphileon return *");
 }
 
 function followUrl() {

@@ -48,28 +48,18 @@ disqusShortname = "danbrodsky"
 [[params.social]]
     name = "Github"
     icon = "fab fa-github"
-    weight = 1
-    url = "https://github.com/johndoe/"
-[[params.social]]
-    name = "Gitlab"
-    icon = "fa fa-envelope"
     weight = 2
-    url = "https://gitlab.com/johndoe/"
+    url = "https://github.com/danbrodsky/"
 [[params.social]]
-    name = "Twitter"
-    icon = "fab fa-twitter"
+    name = "Email"
+    icon = "fa fa-envelope"
     weight = 3
-    url = "https://twitter.com/johndoe/"
+    url = "mailto:danbrodsky@pm.me"
 [[params.social]]
     name = "LinkedIn"
     icon = "fab fa-linkedin"
     weight = 4
-    url = "https://www.linkedin.com/in/johndoe/"
-[[params.social]]
-    name = "Medium"
-    icon = "fab fa-medium"
-    weight = 5
-    url = "https://medium.com/@johndoe"
+    url = "https://www.linkedin.com/in/danbrodsky/"
 
 
 [languages]
@@ -87,12 +77,7 @@ disqusShortname = "danbrodsky"
         url = "/posts/"
 
         [[languages.en.menu.main]]
-        name = "Projects"
+        name = "CTF Writeups"
         weight = 3
-        url = "/projects/"
-
-        [[languages.en.menu.main]]
-        name = "Contact me"
-        weight = 5
-        url = "/contact/"
+        url = "/writeups/"
 
