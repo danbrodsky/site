@@ -1,0 +1,88 @@
+#+title: InsomniHack 2020 - Kaboom (reversing)
+#+author: Daniel Brodsky
+#+date: 2020-01-13
+
+#+hugo_base_dir: ../../
+#+hugo_section: writeups
+#+startup: inlineimages
+#+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
+#+description: A Windows PE32 reversing problem with a twist
+
+** Analysis
+The question comes in the form of a Windows PE32 binary. Attempting to run it
+causes it to print out "KABOOM!" and then exit. Running ~strings~ on the binary
+prints out the string =UPX= and the version =3.95=. There is also a
+[[https://www.youtube.com/watch?v=oGJr5N2lgsQ][YouTube video]] indicating that there's some trickery being pulled, but I didn't
+pay enough attention to this. Unpacking the binary with ~upx -d~ and then
+inspecting in IDA shows a very simple function for main.
+
+[[/w1_code_raw.png]]
+
+While IDA could not recognize the library function calls in main, it was fairly
+obvious from their arguments and return values what each of them were.
+
+[[/w1_code_labeled.png]]
+
+From here I could now see that the function expects that the first command-line
+argument is =defuse= and that some variable in memory matches with the YouTube
+link in order to print the YouTube link? Clearly the YouTube link is a
+placeholder for a different value in memory and that value is being written into
+memory at some point. IDA did not detect that the YouTube link in memory was
+ever modified, and an extremely unrolled strncmp led me to think that maybe
+there was a trick that overwrites memory without IDA's analysis being able to
+detect it. I wasted a few hours on this path until eventually realizing that
+this wasn't the right way to go.
+
+I decided to return back to the packed binary and see if there were any
+shenanigans there that I missed. The decompiled code for the UPX stub was a mess
+so I used Windbg to step through the unpacking process. Here I'd see that
+~GetCommandLineA~ was being looked up and called during unpacking, indicating
+that the unpacking process was reading a command-line argument and using it for
+something.
+
+[[/w1_code_string.png]]
+
+Stepping further through the code reveals that during unpacking the program
+compares the command line to a 13 byte constant value and if the values match
+then to load an alternative part of memory in.
+
+[[/w1_hidden_code.png]]
+
+Using Python, I wrote a simple function for generating this string. I actually
+could have just patched the register values during runtime to skip over this
+check, but I didn't know at the time if the binary would use the string again
+later.
+
+#+BEGIN_SRC python
+#!/usr/bin/env python3
+
+key = [0x42, 0x63, 0xB4, 0xE1, 0x4C, 0xBA, 0x1B, 0x83, 0xD7, 0xFD, 0x77, 0xE3, 0x33]
+
+c = 0x42
+ans = ""
+
+for i in range(len(key) - 1):
+    a = key[i + 1] - key[i]
+    if a < 0:
+        a = (0x100 + key[i + 1]) - key[i]
+    ans = chr(a) + ans
+
+print(ans)
+
+#+END_SRC
+
+Putting everything together, I ran the packed executable again with
+~./kaboom.exe defuse Plz&Thank-Q!~ and out came the flag:
+
+~Congrats! The flag is INS{GG EZ clap PogU 5Head B) Kreygasm <3<3}~
+
+Had I not been such a Pepega and taken my time to not get bamboozled, I could have done this much faster.
+#+BEGIN_CENTER
+[[/w1_pepega.png]]
+#+END_CENTER
+
+** Opinion
+Most CTFs attempt to balance the learning aspect of a problem with some level of
+tediousness so that the answer is not too trivial. This question has little
+learning to it (a bit on windows PE32 binaries and UPX packing), and tricks the
+user into wasting time looking for a red herring. Not very fun.
