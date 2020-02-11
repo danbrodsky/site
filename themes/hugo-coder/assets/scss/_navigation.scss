@@ -1,9 +1,9 @@
 .navigation {
-  height: 1.0rem;
+  height: 0;
   width: 100%;
   a, span {
     display: inline;
-    font-size: 1.6rem;
+    font-size: 3vmin;
     font-family: $heading-font-family;
     font-weight: 700;
     line-height: 6.0rem;
@@ -14,75 +14,11 @@
     &:focus {
       color: $link-color
     }
-  }
-  .navigation-title {
-    letter-spacing: 0.1rem;
-    text-transform: uppercase;
-  }
-  .navigation-list {
-    float: right;
-    list-style: none;
-    margin-bottom: 0;
-    margin-top: 0;
-    @media only screen and (max-width : 768px) {
-      position: absolute;
-      top: 6.0rem;
-      right: 0;
-      z-index: 5;
-      visibility: hidden;
-      opacity: 0;
-      padding: 0;
-      max-height: 0;
-      width: 100%;
-      background-color: $bg-color;
-      border-top: solid 2px $alt-bg-color;
-      border-bottom: solid 2px $alt-bg-color;
-      transition: opacity 0.25s, max-height 0.15s linear;
-    }
-    .navigation-item {
-      float: left;
-      margin: 0;
-      position: relative;
-      @media only screen and (max-width : 768px) {
-        float: none !important;
-        text-align: center;
-        a, span {
-          line-height: 5.0rem;
-        }
-      }
-      a, span {
-        margin-left: 1.0rem;
-        margin-right: 1.0rem;
-      }
-    }
-    .menu-separator {
-      @media only screen and (max-width : 768px) {
-        border-top: 2px solid $fg-color;
-        margin: 0 8.0rem;
-        span {
-          display: none;
-        }
-      }
-    }
-  }
-  #menu-toggle {
-    display: none;
-    @media only screen and (max-width : 768px) {
-      &:checked + label {
-        color: $alt-bg-color;
-      }
-      &:checked + label + ul {
-        visibility: visible;
-        opacity: 1;
-        max-height: 100rem;
-      }
-    }
-  }
-  .menu-button {
-    display: none;
-    @media only screen and (max-width : 768px) {
+
+
+    @media only screen and (max-width : 500px) {
       display: block;
-      font-size: 2.4rem;
+      font-size: 3rem;
       font-weight: 400;
       line-height: 6.0rem;
       color: $fg-color;
@@ -93,4 +29,160 @@
       }
     }
   }
+
+  .navigation-title {
+    letter-spacing: 0.1rem;
+    text-transform: uppercase;
+    display: table-row;
+  }
+  .navigation-list {
+    float: right;
+    list-style: none;
+    margin-bottom: 0;
+    margin-top: 0;
+    z-index: 10000;
+    @media only screen and (max-width : 500px) {
+        position: fixed;
+        -webkit-transform: translateZ(0);
+        width: 100%;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        left: 0;
+        bottom: 0%;
+        align: center;
+        background-color: #081111;
+        justify-content: space-around;
+
+        .navigation-item {
+            a, span {
+                font-size: 2rem;
+                padding: 0;
+            }
+        }
+    }
+
+    .navigation-item {
+      float: left;
+   
+      a, span {
+        margin-left: 1.0vmin;
+        margin-right: 1.0vmin;
+      }
+    }
+  }
+  #menu-toggle {
+    display: none;
+ 
+  }
+  .menu-button {
+    display: none;
+  }
 }
+.icon-ul {
+    justify-content: space-evenly;
+    @media only screen and (max-width : 500px) {
+        margin-top: 0;
+    }
+}
+
+
+.icon-ul-li {
+    a {
+        i {
+            font-size: 2vmin;
+            position: absolute;
+            @media only screen and (max-height : 500px) {
+                font-size: 1.2rem;
+            }
+            @media only screen and (min-height : 500px) {
+            }
+            @media only screen and (max-width : 500px) {
+                font-size: 2rem;
+                top: 90%;
+            }
+        }
+    }
+
+}
+
+// #helptext {
+//   height: 1.0rem;
+//   width: 100%;
+//   align: center;
+//   font-size: 1.1vmax;
+//   line-height: 4vh;
+//   @media only screen and (max-width : 650px) {
+//       font-size: 1.4vmax;
+//       position: absolute;
+//       align: center;
+//       right: 50vw;
+//       top: 22vh;
+//   }
+// }
+
+#main {
+  // width: 100%;
+  height: 0;
+  left: 0;
+  font-size: 2rem;
+  line-height: 4rem;
+  justify-content: flex-end;
+  bottom: 20%;
+  width: 90vw;
+  position: absolute;
+  margin-right: 10%;
+  display: inline;
+  z-index: 10;
+  @media only screen and (min-width : 500px) {
+      position: absolute;
+      margin-right: 10%;
+      display: inline;
+  }
+  @media only screen and (max-height : 650px) {
+      font-size: 1.5rem;
+      line-height: 2rem;
+      left: 10%;
+  }
+  @media only screen and (max-width : 500px) {
+      line-height: 2rem;
+      font-size: 1.5rem;
+      position: absolute;
+      align: center;
+      align-items: center;
+      justify-content: center;
+      left: 0;
+  }
+}
+
+button {
+    // width: 100%;
+    color: white;
+    font-size: 2.5rem;
+    float: left;
+    :hover {
+      color: #906cff;
+    }
+}
+
+#helptext {
+    float: left;
+    z-index: 10;
+    position: relative;
+    span {
+      z-index: 10;
+      position: relative;
+    }
+}
+
+.search-container {
+    float: right;
+    height: 100px;
+    width: 400px;
+    position: relative;
+    left: 10%;
+    @media only screen and (max-width : 500px) {
+        width: 300px;
+    }
+}
+

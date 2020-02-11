@@ -1,0 +1,20 @@
+    <div class="icons" style="right: -5vmin; top: 5vmin">
+        {{ with .Site.Params.social }}
+        <ul class="icon-ul">
+            {{ range sort .}}
+            {{ if .icon }}
+            <li class ="icon-ul-li" style="position: relative; z-index: 2;">
+                <a href="{{ .url }}" aria-label="{{ .name }}">
+                    <i class="{{ .icon }} icon-i" aria-hidden="true"></i>
+                </a>
+            </li>
+            {{ else }}
+            <li>
+                <a href="{{ .url }}" aria-label="{{ .name }}">{{ .name }}</a>
+            </li>
+            {{ end }}
+            {{ end }}
+        </ul>
+        {{ end }}
+    </div>
+
