@@ -1,4 +1,4 @@
-#+title: OverTheWire Advent 2019 - Unmanaged (pwn)
+#+title: OverTheWire Advent 2019 - Unmanaged (.NET/pwn)
 #+author: Daniel Brodsky
 #+date: 2019-12-15
 #+hugo_base_dir: ../../
@@ -6,7 +6,7 @@
 #+startup: inlineimages
 #+startup: inlineimages
 #+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
-#+description: Free-range dotnet shenanigans
+#+description: Free-range .NET shenanigans
 
 ** Problem
 ~I've made a Byte Buffer as a Service (BBAAS)! The service is written in C#, but To avoid performance penalties, we use unsafe code which should have comparable
