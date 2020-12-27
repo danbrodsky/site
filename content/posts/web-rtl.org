@@ -1,0 +1,119 @@
+#+title: Web RTL
+#+author: Daniel Brodsky
+#+date: 2020-12-15
+#+hugo_base_dir: ../../
+#+hugo_section: posts
+#+startup: inlineimages
+#+startup: inlineimages
+#+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
+#+description: writing an FPGA simulator in rust that runs in browser to simulate hardware designs written in Haskell... because why not?
+
+This is just the surface.
+
+* What is this?
+
+Before I get into explaining what you see on the front page of my site, I thought I'd drop a diagram as a quick overview so here it is:
+
+[[/p3_diagram.png]]
+
+What you see on my front page is actually mean to be a full dive through the workings of a modern machine, starting at the program level and going all the way down to the hardware logic level. This is then run through an [[https:github.com/danbrodsky/webRTL][FPGA simulator]] compiled to WASM so that it can run in the browser.
+
+* But Why?
+
+Most of my inspiration for working on this came from wanting to learn more about a certain set of languages, frameworks, and concepts. This was the result of me attempting to combine as many things I was interested in learning into one project. In terms of practical use-cases there are likely very few.
+Most popular FPGA simulators use higher-level hardware descriptions written in an HDL like VHDL or Verilog (or even higher like Clash and Chisel) and compile it to a form that enables fast threaded execution without the advantages fully parallelized hardware has. An obvious example of this can be seen in the simulator built into Clash, a higher-level HDL that acts more like a library on top of Haskell and the HDL I used when writing hardware descriptions for this project (praise the Monad!). Instead of compiling Clash into fully-parallelized Verilog code, the simulator just runs the high-level functions (map, fold, etc) in the same way that it would if it was a regular Haskell program. These simulators can't compete against FPGAs for fully-parallelizable tasks, but do fairly well outside of that.
+The simulator I wrote uses a lower-level BLIF specification of the hardware design, where high-level logic from the HDL has been converted to only lookup tables (LUTs) and registers for handling signals as they pass through the circuit. This is close to the same configuration used when programming an FPGA, missing only the planning for where each element should go and how each should be connected (place and route). For the time being I implemented the placement and routing as a simple topological sorting of each element by their signal dependencies. This is very slow compared to existing simulators, as each signal now has to be processed individually. Benchmarking this demo showed an average 30x drop in performance over the Clash simulator, which is quite slow itself compared to more popular simulators like Verilator. I have plans in the future to transfer the workload onto the GPU when web GPU support is more widespread, which should improve performance significantly.
+
+* Implementation
+
+** The parallax checkboard effect
+The parallax checkerboard effect is a hardware description written in Clash that was based on part of HellMood's award-winning 256 byte demo [[https:www.pouet.net/prod.php?which=85227][memories]]. I took the effects of the original x86 assembly and converted them to a hardware description.
+
+TODO x86 code here
+TODO clash code here
+#+begin_src asm
+mov cx,bp      ; set inital point to time
+mov bx,-16     ; limit to 16 iterations
+fx3L:
+add cx,di      ; offset point by screenpointer
+mov ax,819     ; magic, related to Rrrola constant
+imul cx        ; get X',Y' in DX
+               ; multiplies cx by ax, stores result in DX:AX
+ror dx,1       ; set carry flag on "hit"
+               ; rotates 17 bits in dx, including carry (wrapping)
+inc bx         ; increment iteration count
+ja fx3L        ; loop until "hit" or "iter=max" (16 times)
+               ; CF == 0 and ZF == 0 for this to trigger
+               ; so arg == 0 or carry == 1 to stop looping
+lea ax,[bx+31] ; map value to standard gray scale
+#+end_src
+
+#+begin_src haskell
+palette i
+  | i ==    0   = 0xFF000000
+  | i ==    1   = 0xFF101010
+  | i ==    2   = 0xFF202020
+  | i ==    3   = 0xFF353535
+  | i ==    4   = 0xFF454545
+  | i ==    5   = 0xFF555555
+  | i ==    6   = 0xFF656565
+  | i ==    7   = 0xFF757575
+  | i ==    8   = 0xFF8A8A8A
+  | i ==    9   = 0xFF9A9A9A
+  | i ==   10   = 0xFFAAAAAA
+  | i ==   11   = 0xFFBABABA
+  | i ==   12   = 0xFFCACACA
+  | i ==   13   = 0xFFDFDFDF
+  | i ==   14   = 0xFFEFEFEF
+  | otherwise   = 0xFFFFFFFF :: Unsigned 32
+
+rayCast r =
+  hit
+  where
+    rrrola = 819 :: BitVector 16
+    dxax = r `mul` rrrola
+    hit = testBit dxax 16
+
+prlx di c =
+  color
+  where
+    r = generate d16 (+di) c
+    a = map rayCast r
+    color = palette (fromMaybe 15 (elemIndex True a))
+
+
+prlxDemo =
+  pixel
+  where
+    v = vga
+    pixel = register pixelInit (prlx <$> (_counter <$> v) <*> (_timer <$> v))
+    pixelInit = 0xFF000000 :: Unsigned 32
+
+#+end_src
+
+The demo itself uses a modified version of the [[http:www.sizecoding.org/wiki/General_Coding_Tricks#Obtaining_X_and_Y_without_DIV_.28The_Rrrola_Trick.29][rrrola trick]] to draw an approximate geometric line for raycasting without the need to use any floating point arithmetic, which is great since I didn't really want to implement a floating point unit for a simple demo. The Clash code above is compiled to Verilog, and then synthesized and converted to a BLIF specification using [[http:www.clifford.at/yosys/][Yosys]].
+
+** FPGA simulator
+The simulator is fully written in Rust. The simulator first takes the BLIF specification generated by Yosys as input and parses it into a model structure with each basic logic element (BLE), input signals, and output signals. A topological sort is then used to order the elements so that elements that require some signal to have been created during the current cycle will come after the element that generates that signal. I've set up a simulation loop to run on the model for some number iterations and generate the model's output signals on each cycle. In the case of the hardware description above, every cycle will output the color of the next pixel on a 320x200 screen. While the original implementation I wrote would compile the simulator to WASM and draw the pixels directly to screen, poor performance of the current implementation led me to save frame data to a file and use a second program compiled to WASM to write frame data to the screen instead.
+
+* Future Improvements
+
+** Parallelizing simulator execution using WebGL
+This is the main reason why I'm stopping this project here for now. My original plan for the simulator was to implement the LUTs and registers using compute shaders so that I could take advantage of the parallel nature of hardware (similar to [[https://github.com/google/google-ctf/tree/master/2019/finals/reversing-gpurtl][this problem]] from Google CTF Finals 2019). Unfortunately, existing graphics APIs do not make it easy to implement a locking feature on individual cores for continuing execution only when a signal they are dependent on has been generated. Also, since I want this simulator to run in a browser, I'd need to use the WebGL API, which only recently added compute shaders and only supports them in experimental builds of popular browsers. I likely won't reapproach this project until then since I wouldn't be able to show it here if I did. :(
+
+** Adding a RISC CPU on top of the abstraction
+This is pretty low-hanging fruit in my opinion if I wanted to make this project even more ridiculous, as writing a RISC CPU with minimal functionality is pretty trivial. However, performance while doing nothing other than drawing a fancy demo to the screen is already so bad that dumping a RISC core on top would make even pre-rendering frames using the simulator very painful.
+
+** Adding an operating system on top of the custom RISC core
+Same as above. :(
+
+* Conclusion
+Working on this project was a lot of fun and a great learning experience for me. I didn't intend to spend as much time as I did getting things to work as I wanted them, but the end result was that I learned far more about Haskell, WASM, and FPGAs than I had originally intended to. Hopefully once compute shaders are stable in WebGL I can take another stab at finishing the entire abstraction.
+
+
+* References
+- [[http://hackage.haskell.org/package/clash-prelude-1.2.5][Clash documentation]]
+- [[https://rustwasm.github.io/wasm-bindgen/web-sys/index.html][guide and examples for working with WASM APIs in Rust]]
+- [[https://docs.verilogtorouting.org/en/latest/_downloads/a79b6634b582f56c053f2abad923112a/blif.pdf][BLIF format specification]]
+- [[http://www.sizecoding.org/wiki/Memories][in-depth explanation of memories by its creator HellMood]]
+- [[https://www.youtube.com/watch?v=3ac9HAsfV8c][video on making an FPGA simulator that runs on a GPU]]
