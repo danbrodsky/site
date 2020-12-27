@@ -80,4 +80,7 @@ disqusShortname = "danbrodsky"
         name = "CTF Writeups"
         weight = 3
         url = "/writeups/"
-
+[module]
+  [[module.mounts]]
+    source = "pkg"
+    target = "static/divein/"
