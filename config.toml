@@ -82,5 +82,5 @@ disqusShortname = "danbrodsky"
         url = "/writeups/"
 [module]
   [[module.mounts]]
-    source = "pkg"
+    source = "webrtl"
     target = "static/divein/"
