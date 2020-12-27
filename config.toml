@@ -80,7 +80,14 @@ disqusShortname = "danbrodsky"
         name = "CTF Writeups"
         weight = 3
         url = "/writeups/"
+
 [module]
   [[module.mounts]]
     source = "webrtl"
     target = "static/divein/"
+  [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
+    source = "content"
+    target = "content"
