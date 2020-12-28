@@ -117,3 +117,4 @@ Working on this project was a lot of fun and a great learning experience for me.
 - [[https://docs.verilogtorouting.org/en/latest/_downloads/a79b6634b582f56c053f2abad923112a/blif.pdf][BLIF format specification]]
 - [[http://www.sizecoding.org/wiki/Memories][in-depth explanation of memories by its creator HellMood]]
 - [[https://www.youtube.com/watch?v=3ac9HAsfV8c][video on making an FPGA simulator that runs on a GPU]]
+- [[http://cliffle.com/blog/bare-metal-wasm/][Guide to making graphics demos in WASM]] 
