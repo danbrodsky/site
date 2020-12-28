@@ -10,9 +10,13 @@
 
 * What is this?
 
-[[/p3_diagram.png]]
+[[/p3_display.png]]
 
-What you see on my front page is actually mean to be a full dive through the abstractions of a computer, starting at the program level and going all the way down to the hardware logic level. This is then run through an [[https:github.com/danbrodsky/webRTL][FPGA simulator]] compiled to WASM so that it can run in the browser.
+What you see here and on my front page is a demo program that was converted to a hardware design and simulated using an [[https:github.com/danbrodsky/webRTL][FPGA simulator]] compiled to WASM so that it can run in the browser. This was meant to be a full dive through the abstractions of a computer, starting at the program level and going all the way down to the hardware logic level, but certain project limitations have left this project on hold for now.
+
+This is an overview of the full project structure.
+
+[[/p3_diagram.png]]
 
 * But Why?
 

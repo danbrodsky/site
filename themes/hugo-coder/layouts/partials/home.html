@@ -1,11 +1,13 @@
 <style>
 #canvas {
-        width: 100vw;
-        height: 100vh;
+    width: 100vw;
+    height: 100vh;
 }
-.text{
+.text {
+    width: 100vw;
+    height: 50vw;
     position: fixed;
-    top: 50%;
+    top: 20%;
     left: 0;
     right: 0;
     text-align: center;
@@ -19,11 +21,17 @@
     text-decoration: underline;
     text-decoration-color: currentcolor;
 }
+#text {
+    position: fixed;
+    top: 50%;
+    left: 0;
+    right: 0;
+}
 </style>
-<body >
+<body>
     <canvas id="canvas">
     </canvas>
-    <div style="cursor: pointer;" onclick="window.location='/posts/web-rtl';" class="text navigation-link"><b>This is just the surface.</b>
+    <div style="cursor: pointer;" onclick="window.location='/posts/web-rtl';" class="text navigation-link"><b id="text">This is just the surface.</b>
     </div>
 <script type="module">
     import init, {test_simulator} from './divein/divein.js';
