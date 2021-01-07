@@ -9,7 +9,7 @@ My main goal is always to expand my range of knowledge, and the depth in abstrac
 
 ![](/ctf.png#center)
 
-I post writeups to CTF problems that I found really interesting occasionally, and also some unrelated posts to my blog.
+I post writeups to CTF problems that I found really interesting occasionally, and also some unrelated posts to my blog. All posts here are written using org-mode so I can live longer inside of an Emacs session.
 
 If you'd like to get in touch, email me at [danbrodsky@pm.me](mailto:danbrodsky@pm.me)
 

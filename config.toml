@@ -14,6 +14,7 @@ pygmentscodefences = true
 pygmentscodefencesguesssyntax = true
 
 disqusShortname = "danbrodsky"
+googleAnalytics = "UA-186824116-1"
 
 [params]
     author = "Daniel Brodsky"
