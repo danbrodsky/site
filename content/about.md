@@ -13,4 +13,11 @@ I post writeups to CTF problems that I found really interesting occasionally, an
 
 If you'd like to get in touch, email me at [danbrodsky@pm.me](mailto:danbrodsky@pm.me)
 
+
 &nbsp;&nbsp;&nbsp;
+{{% center %}}
+_"Sun, you just can't beat me, you just can't.  Stop trying, give up.  I'm serious, I am going to kick the living **** out of you, game over, lights out."_
+{{% /center %}}
+{{% right %}}
+-Linus Torvalds, arch/sparc/lib/checksum.S, 2009
+{{% /right %}}

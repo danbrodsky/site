@@ -61,6 +61,11 @@ googleAnalytics = "UA-186824116-1"
     icon = "fab fa-linkedin"
     weight = 4
     url = "https://www.linkedin.com/in/danbrodsky/"
+[[params.social]]
+    name = "Resume"
+    icon = "fas fa-file"
+    weight = 4
+    url = "https://www.danbrodsky.me/resume.pdf"
 
 
 [languages]
@@ -92,3 +97,8 @@ googleAnalytics = "UA-186824116-1"
   [[module.mounts]]
     source = "content"
     target = "content"
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
